@@ -43,18 +43,21 @@ def test_color_formatter_is_plain_when_disabled():
     assert "plain message" in out
 
 
-def test_setup_logging_quiets_instagrapi_request_logs_at_info(_isolate_root_logging):
+def test_setup_logging_shows_instagrapi_info_but_quiets_urllib3(_isolate_root_logging):
     setup_logging("INFO")
     assert logging.getLogger().level == logging.INFO
-    assert logging.getLogger("instagrapi").level == logging.WARNING
-    assert logging.getLogger("private_request").level == logging.WARNING
-    assert logging.getLogger("public_request").level == logging.WARNING
+    # instagrapi's request logs follow the root level so INFO progress is visible.
+    assert logging.getLogger("instagrapi").getEffectiveLevel() == logging.INFO
+    # urllib3 connection-pool noise stays quiet regardless.
+    assert logging.getLogger("urllib3").level == logging.WARNING
 
 
-def test_setup_logging_keeps_request_logs_at_debug(_isolate_root_logging):
+def test_setup_logging_debug_shows_instagrapi_debug(_isolate_root_logging):
     setup_logging("DEBUG")
     assert logging.getLogger().level == logging.DEBUG
-    assert logging.getLogger("instagrapi").level == logging.DEBUG
+    assert logging.getLogger("instagrapi").getEffectiveLevel() == logging.DEBUG
+    # urllib3 is capped at WARNING even at DEBUG (it's extreme noise).
+    assert logging.getLogger("urllib3").level == logging.WARNING
 
 
 def test_setup_logging_is_idempotent_one_color_handler(_isolate_root_logging):

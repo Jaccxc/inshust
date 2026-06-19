@@ -388,8 +388,10 @@ class InstagramAdapter:
         from instagrapi.exceptions import ChallengeError
 
         self._apply_client_settings()
+        logger.info("authenticating as %s", self._config.username or "<no username set>")
         try:
             if self._load_persisted_session():
+                logger.info("reusing saved session at %s", self._config.session_path)
                 return
 
             self._fresh_login()
@@ -443,9 +445,11 @@ class InstagramAdapter:
         """
         from instagrapi.exceptions import TwoFactorRequired
 
+        logger.info("no saved session — performing a fresh login")
         try:
             self._client.login(self._config.username, self._config.password)
         except TwoFactorRequired:
+            logger.info("two-factor authentication required; submitting code")
             code = self._two_factor_code()
             if code is None:
                 raise

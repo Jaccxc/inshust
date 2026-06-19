@@ -3,9 +3,11 @@
 instagrapi logs every private API call (full URLs) at INFO via the
 ``instagrapi`` / ``private_request`` / ``public_request`` loggers, which drowns
 our own messages. :func:`setup_logging` installs a single colored stream handler
-on the root logger, sets our level, and turns those request loggers down to
-WARNING (unless we're at DEBUG). Colors are ANSI, applied only when writing to a
-TTY and ``NO_COLOR`` is unset (``FORCE_COLOR`` forces them on).
+on the root logger and reformats everything (so instagrapi's request logs are
+readable instead of raw ``INFO:private_request:...`` lines) while following the
+chosen level — at INFO you SEE instagrapi's progress; only urllib3's
+connection-pool noise is pinned to WARNING. Colors are ANSI, applied only when
+writing to a TTY and ``NO_COLOR`` is unset (``FORCE_COLOR`` forces them on).
 
 It also provides interactive console handlers so a human-present run (the
 ``inshust-threads`` / ``inshust-backfill`` commands) can resolve an Instagram
@@ -29,9 +31,6 @@ _LEVEL_COLORS = {
 }
 _DIM = "\033[2m"
 _RESET = "\033[0m"
-
-# instagrapi's per-request loggers spam full API URLs at INFO; quiet unless DEBUG.
-_NOISY_LOGGERS = ("instagrapi", "private_request", "public_request", "urllib3")
 
 
 class ColorFormatter(logging.Formatter):
@@ -89,23 +88,35 @@ def setup_logging(level: str | int = "INFO") -> None:
     handler = logging.StreamHandler(sys.stderr)
     handler.setFormatter(ColorFormatter(use_color=_want_color(sys.stderr)))
     root.addHandler(handler)
-    noisy = level_value if level_value <= logging.DEBUG else logging.WARNING
-    for name in _NOISY_LOGGERS:
-        logging.getLogger(name).setLevel(noisy)
+    # instagrapi's request loggers follow the chosen level (the formatter makes
+    # them readable), so INFO shows real progress. urllib3's connection-pool
+    # chatter is pure noise, so keep it at WARNING+ regardless of level.
+    logging.getLogger("urllib3").setLevel(max(level_value, logging.WARNING))
 
 
 def console_challenge_code_handler(username: str, choice: object) -> str:
     """Prompt the operator for the login-challenge code Instagram just sent.
 
     Wired only into the human-present commands. instagrapi calls this with the
-    delivery ``choice`` (EMAIL/SMS); returning the typed code lets instagrapi
-    resolve the checkpoint instead of raising and pausing the bot.
+    delivery ``choice`` (EMAIL/SMS); we tell the operator EXACTLY where the code
+    was sent (a checkpoint code very often goes to email, not the phone), then
+    return the typed code so instagrapi resolves the checkpoint instead of
+    raising and pausing the bot.
     """
-    target = getattr(choice, "name", None) or str(choice)
-    return input(
-        f"\n🔑 Instagram sent a verification code (via {target}) for {username}.\n"
-        f"   Enter the code: "
-    ).strip()
+    target = str(getattr(choice, "name", None) or choice).upper()
+    where = {
+        "EMAIL": "your EMAIL inbox  (check spam/promotions too)",
+        "SMS": "your phone via SMS",
+    }.get(target, f"{target}")
+    print(
+        "\n"
+        + "=" * 64
+        + "\n  INSTAGRAM SECURITY CHALLENGE\n"
+        + f"  A verification code was sent to {where}\n"
+        + f"  for account @{username}.\n"
+        + "=" * 64
+    )
+    return input("  Enter the verification code: ").strip()
 
 
 def console_two_factor_code_provider() -> str:
