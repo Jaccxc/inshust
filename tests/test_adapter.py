@@ -58,3 +58,17 @@ def test_existing_session_is_reused_no_fresh_login(tmp_path):
 
     client.load_settings.assert_called_once()
     client.login.assert_not_called()
+
+
+def test_fresh_login_when_no_session_then_persists(tmp_path):
+    cfg = _config(tmp_path)
+    # No session file on disk -> a real credential login must happen.
+    client = MagicMock()
+    client.login.return_value = True
+
+    _adapter(cfg, client).login()
+
+    client.login.assert_called_once_with("bot", "pw")
+    # Session is persisted so the next start reuses it.
+    client.dump_settings.assert_called_once_with(cfg.session_path)
+    client.load_settings.assert_not_called()
