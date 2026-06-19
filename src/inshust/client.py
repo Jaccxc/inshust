@@ -25,12 +25,15 @@ class ClientPort(Protocol):
         text: str,
         original_message_id: str,
         original_client_context: str | None,
-    ) -> None:
+    ) -> str | None:
         """Send ``text`` into ``thread_id``, quoting the original share.
 
         The real adapter uses native quote-reply (``reply_to_message``) keyed by
         ``original_message_id``/``original_client_context`` when possible, with a
-        plaintext fallback. This slice only needs the call to be recordable.
+        plaintext fallback, retrying documented transient group-send 500s with
+        backoff. It returns the outcome (``"sent"``/``"fallback"``) for the
+        listener's structured log, and raises ``SendFailedError`` on a persistent
+        failure. A double whose return value is ``None`` is treated as ``"sent"``.
         """
         ...
 

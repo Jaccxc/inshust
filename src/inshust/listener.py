@@ -12,6 +12,13 @@ identity+store path without the reply. The flow:
 5. dedupe — FIRST_SEEN records silently; DUPLICATE sends exactly one reply.
 6. always mark the message processed at the end.
 
+Card #6 (observability) adds STRUCTURED logs at this orchestration seam: each
+observed share (``event=share_observed``), the dedupe decision
+(``event=dedupe_decision`` with FIRST_SEEN/DUPLICATE), and the reply outcome
+(``event=reply_outcome`` with sent/fallback/failed). A persistent send failure
+(``SendFailedError`` from the adapter after its retry budget) is caught here and
+logged as a ``failed`` outcome so the run loop survives instead of crashing.
+
 Resolving before building the event is what makes the same reel dedupe to one
 key whether it was shared as a clip or as an xma card.
 
@@ -24,11 +31,12 @@ from __future__ import annotations
 
 import logging
 
+from inshust.adapter import SendFailedError
 from inshust.client import ClientPort
 from inshust.config import Config
 from inshust.dedupe import dedupe
 from inshust.media_identity import extract_share
-from inshust.models import DUPLICATE, MediaKey, ShareEvent
+from inshust.models import DUPLICATE, MediaKey, SeenRecord, ShareEvent
 from inshust.reply import format_reply
 from inshust.resolver import MediaResolver
 from inshust.store import Store
@@ -71,20 +79,74 @@ class Listener:
 
         # 4. normalize into a ShareEvent
         event = self._build_event(message, media_key, message_id)
+        logger.info(
+            "observed share",
+            extra={
+                "event": "share_observed",
+                "message_id": event.message_id,
+                "media_pk": event.media_key.pk,
+                "media_type": event.media_key.media_type,
+                "sender_username": event.sender_username,
+                "thread_id": event.thread_id,
+            },
+        )
 
         # 5. dedupe + (on duplicate) reply exactly once
         decision = dedupe(self._store, event)
+        logger.info(
+            "dedupe decision %s",
+            decision.kind,
+            extra={
+                "event": "dedupe_decision",
+                "message_id": event.message_id,
+                "media_pk": event.media_key.pk,
+                "decision": decision.kind,
+            },
+        )
         if decision.kind == DUPLICATE and decision.original is not None:
-            text = format_reply(decision.original, self._config.timezone)
-            self._client.send_reply(
+            self._reply_to_duplicate(event, decision.original)
+
+        # 6. always mark processed last
+        self._store.mark_processed(message_id)
+
+    def _reply_to_duplicate(self, event: ShareEvent, original: SeenRecord) -> None:
+        """Send the duplicate call-out and log its outcome (never crash).
+
+        The adapter retries transient group-send 500s internally; a PERSISTENT
+        failure surfaces as :class:`SendFailedError`, which is caught here and
+        logged as a ``"failed"`` reply outcome so the surrounding run loop
+        survives and keeps processing later messages. The send's own return
+        (``"sent"``/``"fallback"``) becomes the structured outcome; a double
+        that returns ``None`` is treated as ``"sent"``.
+        """
+        text = format_reply(original, self._config.timezone)
+        try:
+            outcome = self._client.send_reply(
                 thread_id=event.thread_id,
                 text=text,
                 original_message_id=event.message_id,
                 original_client_context=event.client_context,
             )
-
-        # 6. always mark processed last
-        self._store.mark_processed(message_id)
+        except SendFailedError:
+            logger.error(
+                "reply send failed after retries",
+                extra={
+                    "event": "reply_outcome",
+                    "message_id": event.message_id,
+                    "media_pk": event.media_key.pk,
+                    "outcome": "failed",
+                },
+            )
+            return
+        logger.info(
+            "reply sent",
+            extra={
+                "event": "reply_outcome",
+                "message_id": event.message_id,
+                "media_pk": event.media_key.pk,
+                "outcome": outcome or "sent",
+            },
+        )
 
     def _build_event(self, message: object, media_key: MediaKey, message_id: str) -> ShareEvent:
         return ShareEvent(
