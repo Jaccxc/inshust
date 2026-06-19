@@ -5,13 +5,14 @@ fields validated in the app layer, timestamps as epoch ``INTEGER``, and indices
 on the lookup columns. The schema is created on open; reopening the same file
 preserves data, so the bot is restart-safe.
 
-This slice owns two tables:
+This module owns three tables:
 
 - ``seen_media`` — one row per media pk (first-seen share).
 - ``processed_messages`` — the idempotency gate of handled message ids.
+- ``url_cache`` — the xma URL->pk resolution cache (card #4) so a repeated
+  share url resolves without a second client call.
 
-Later cards extend this (e.g. the xma URL->pk cache, card #3) by adding tables
-and methods; they do not rewrite these.
+Later cards extend this by adding tables/methods; they do not rewrite these.
 """
 
 from __future__ import annotations
@@ -37,6 +38,12 @@ CREATE TABLE IF NOT EXISTS seen_media (
 CREATE TABLE IF NOT EXISTS processed_messages (
     message_id   TEXT    PRIMARY KEY,
     processed_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS url_cache (
+    url         TEXT    PRIMARY KEY,
+    media_pk    TEXT    NOT NULL,
+    resolved_at INTEGER NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_seen_media_pk
@@ -112,6 +119,27 @@ class Store:
         self._conn.execute(
             "INSERT OR IGNORE INTO processed_messages (message_id, processed_at) VALUES (?, ?)",
             (message_id, processed_at),
+        )
+        self._conn.commit()
+
+    # --- url -> pk resolution cache (xma shares) ------------------------
+    def get_cached_pk(self, url: str) -> str | None:
+        """Return the cached media pk for ``url``, or ``None`` on a miss."""
+        row = self._conn.execute(
+            "SELECT media_pk FROM url_cache WHERE url = ?",
+            (url,),
+        ).fetchone()
+        return row["media_pk"] if row is not None else None
+
+    def cache_url_pk(self, url: str, media_pk: str, resolved_at: int = 0) -> None:
+        """Cache ``url`` -> ``media_pk``.
+
+        Idempotent: the first resolution for a url stands (a url maps to one
+        media), so a later re-cache is ignored.
+        """
+        self._conn.execute(
+            "INSERT OR IGNORE INTO url_cache (url, media_pk, resolved_at) VALUES (?, ?, ?)",
+            (url, media_pk, resolved_at),
         )
         self._conn.commit()
 
