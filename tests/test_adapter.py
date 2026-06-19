@@ -137,3 +137,34 @@ def test_paused_adapter_refuses_to_act_further(tmp_path):
             original_client_context=None,
         )
     client.direct_send.assert_not_called()
+
+
+# --- proxy / locale applied from config ------------------------------------
+
+
+def test_proxy_and_locale_applied_when_configured(tmp_path):
+    cfg = _config(
+        tmp_path,
+        proxy="http://user:pass@1.2.3.4:8080",
+        locale="zh_TW",
+    )
+    (tmp_path / "session.json").write_text("{}")  # reuse path: still applies proxy/locale
+    client = MagicMock()
+
+    _adapter(cfg, client).login()
+
+    client.set_proxy.assert_called_once_with("http://user:pass@1.2.3.4:8080")
+    client.set_locale.assert_called_once_with("zh_TW")
+
+
+def test_no_proxy_call_when_proxy_unset(tmp_path):
+    cfg = _config(tmp_path, proxy=None)
+    (tmp_path / "session.json").write_text("{}")
+    client = MagicMock()
+
+    _adapter(cfg, client).login()
+
+    # No proxy configured -> the adapter must not touch the proxy setting.
+    client.set_proxy.assert_not_called()
+    # Locale always has a default, so it is still applied.
+    client.set_locale.assert_called_once_with(cfg.locale)
