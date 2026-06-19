@@ -37,6 +37,7 @@ from __future__ import annotations
 import logging
 import random
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
@@ -135,6 +136,8 @@ class _InstagrapiClient(Protocol):
     def direct_messages(self, thread_id: int, amount: int = ...) -> list: ...
 
     def direct_thread(self, thread_id: int, amount: int = ..., cursor: str | None = ...): ...
+
+    def direct_threads(self, amount: int = ...) -> list: ...
 
     def media_pk_from_url(self, url: str) -> str: ...
 
@@ -321,6 +324,21 @@ def _default_client_factory(config: Config) -> _InstagrapiClient:  # pragma: no 
 
     delay_range = [config.action_delay_min_seconds, config.action_delay_max_seconds]
     return Client(delay_range=delay_range)
+
+
+@dataclass(frozen=True)
+class GroupThread:
+    """A Direct GROUP thread the operator can pick to watch (card #8).
+
+    Carries exactly what the operator needs to find and configure
+    ``IG_THREAD_ID``: the thread ``id`` (the copy target), a human-readable
+    ``title``, and the member ``usernames`` so a group is recognizable even when
+    untitled.
+    """
+
+    id: str
+    title: str
+    members: list[str]
 
 
 class InstagramAdapter:
@@ -600,6 +618,37 @@ class InstagramAdapter:
         self._ensure_active()
         self._delay()
         return str(self._client.media_pk_from_url(url))
+
+    # --- group-thread discovery (card #8) --------------------------------
+    def list_group_threads(self) -> list[GroupThread]:
+        """List the account's Direct GROUP threads (id, title, members).
+
+        Fetches the inbox via ``client.direct_threads`` and keeps only group
+        threads (``is_group`` truthy) — 1:1 DMs are filtered out — so the
+        operator can find the group's thread id to configure ``IG_THREAD_ID``
+        (PRD user story 21). Each result carries the thread ``id`` (the copy
+        target), its ``thread_title``, and member usernames from the thread's
+        user list. Refuses while paused (a challenge needs a human first);
+        spaced by a human-like delay.
+        """
+        self._ensure_active()
+        self._delay()
+        threads = self._client.direct_threads()
+        groups: list[GroupThread] = []
+        for thread in threads or []:
+            if not getattr(thread, "is_group", False):
+                continue
+            groups.append(
+                GroupThread(
+                    id=str(getattr(thread, "id", "") or ""),
+                    title=str(getattr(thread, "thread_title", "") or ""),
+                    members=[
+                        str(getattr(u, "username", ""))
+                        for u in (getattr(thread, "users", None) or [])
+                    ],
+                )
+            )
+        return groups
 
     # --- polling ---------------------------------------------------------
     def fetch_recent_messages(self, amount: int | None = None) -> list[NormalizedMessage]:
