@@ -451,7 +451,7 @@ class InstagramAdapter:
         text: str,
         original_message_id: str,
         original_client_context: str | None,
-    ) -> None:
+    ) -> str:
         """Send ``text`` into ``thread_id``, quoting the original share.
 
         Prefers a native quote-reply via ``direct_send(reply_to_message=...)``
@@ -469,6 +469,11 @@ class InstagramAdapter:
         transient failure exhausts the retry budget and raises
         :class:`SendFailedError` so the caller can log it and keep the loop
         alive instead of crashing.
+
+        Returns the outcome for the caller's structured log: ``"sent"`` when the
+        native quote-reply went through, ``"fallback"`` when it had to drop to a
+        plain send. (A persistent failure raises :class:`SendFailedError`, which
+        the caller logs as ``"failed"``.)
         """
         self._ensure_active()
         thread_ids = [int(thread_id)]
@@ -478,7 +483,7 @@ class InstagramAdapter:
         if reply_to is not None:
             try:
                 self._send_with_retry(text, thread_ids=thread_ids, reply_to_message=reply_to)
-                return
+                return "sent"
             except SendFailedError:
                 # The native path kept hitting transient 500s; let the caller
                 # decide (it logs a "failed" outcome). Re-raise rather than mask
@@ -493,6 +498,7 @@ class InstagramAdapter:
 
         # Fallback: a plain send that still delivers the text (also retried).
         self._send_with_retry(text, thread_ids=thread_ids)
+        return "fallback"
 
     def _send_with_retry(self, text: str, *, thread_ids: list[int], reply_to_message=None) -> None:
         """Send once, retrying documented transient group-send 500s w/ backoff.

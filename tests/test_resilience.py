@@ -181,9 +181,7 @@ class _FallbackClient:
         self.sent: list[SentReply] = []
 
     def send_reply(self, thread_id, text, original_message_id, original_client_context):
-        self.sent.append(
-            SentReply(thread_id, text, original_message_id, original_client_context)
-        )
+        self.sent.append(SentReply(thread_id, text, original_message_id, original_client_context))
         return "fallback"
 
     def resolve_media_pk_from_url(self, url):  # pragma: no cover - not used here
@@ -242,4 +240,3 @@ def test_persistent_send_failure_is_logged_and_loop_survives(tmp_path, caplog):
     # ...and the message is still marked processed (so it is not retried forever
     # on the next poll) -- the loop moved on cleanly.
     assert store.is_processed("m2") is True
-
