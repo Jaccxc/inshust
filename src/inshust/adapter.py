@@ -209,8 +209,62 @@ class InstagramAdapter:
         original_message_id: str,
         original_client_context: str | None,
     ) -> None:
-        """Send ``text`` into ``thread_id`` (paused bot refuses to send)."""
+        """Send ``text`` into ``thread_id``, quoting the original share.
+
+        Prefers a native quote-reply via ``direct_send(reply_to_message=...)``
+        referencing the original message (reconstructed from its id +
+        client_context). If a native quote-reply cannot be constructed or is
+        rejected by the server, FALLS BACK to a plain ``direct_send`` that still
+        delivers the text into the thread.
+
+        A paused bot refuses to send. Each send is preceded by a randomized
+        human-like delay. Retry/backoff on transient send errors is card #5 —
+        the fallback here is the quote-reply-vs-plain seam, not retry; a single
+        clean ``_send`` choke point is left for #5 to wrap.
+        """
         self._ensure_active()
+        thread_ids = [int(thread_id)]
+        self._delay()
+
+        reply_to = self._build_reply_to(original_message_id, original_client_context)
+        if reply_to is not None:
+            try:
+                self._client.direct_send(text, thread_ids=thread_ids, reply_to_message=reply_to)
+                return
+            except Exception:
+                logger.warning(
+                    "native quote-reply failed for message %s; falling back to plain send",
+                    original_message_id,
+                    exc_info=True,
+                )
+
+        # Fallback: a plain send that still delivers the text.
+        self._client.direct_send(text, thread_ids=thread_ids)
+
+    @staticmethod
+    def _build_reply_to(original_message_id: str, original_client_context: str | None):
+        """Reconstruct the minimal ``DirectMessage`` the server quotes against.
+
+        ``direct_send`` reads ``.id`` and ``.client_context`` off the message to
+        build the ``replied_to_item_id``/``replied_to_client_context`` payload.
+        Returns ``None`` if even a minimal message cannot be built, so the
+        caller falls back to a plain send.
+        """
+        from datetime import UTC, datetime
+
+        try:
+            from instagrapi.types import DirectMessage
+
+            return DirectMessage(
+                id=original_message_id,
+                timestamp=datetime.now(UTC),
+                client_context=original_client_context,
+            )
+        except Exception:  # pragma: no cover - defensive: bad/missing id
+            logger.warning(
+                "could not construct reply_to_message for %s", original_message_id, exc_info=True
+            )
+            return None
 
     # --- ClientPort: resolution ------------------------------------------
     def resolve_media_pk_from_url(self, url: str) -> str:
