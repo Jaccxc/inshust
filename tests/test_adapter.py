@@ -10,6 +10,7 @@ delegation, and polling that feeds Listener.handle_message end-to-end.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -168,3 +169,69 @@ def test_no_proxy_call_when_proxy_unset(tmp_path):
     client.set_proxy.assert_not_called()
     # Locale always has a default, so it is still applied.
     client.set_locale.assert_called_once_with(cfg.locale)
+
+
+# --- send_reply: native quote-reply, plaintext fallback, delay -------------
+
+
+def test_send_reply_uses_native_quote_reply(tmp_path):
+    cfg = _config(tmp_path)
+    client = MagicMock()
+    adapter = _adapter(cfg, client)
+
+    adapter.send_reply(
+        thread_id="42",
+        text="already sent by @alice on 2026-06-10 14:32",
+        original_message_id="m-orig",
+        original_client_context="ctx-orig",
+    )
+
+    client.direct_send.assert_called_once()
+    call = client.direct_send.call_args
+    # The text is sent into the configured thread...
+    assert call.args[0] == "already sent by @alice on 2026-06-10 14:32"
+    assert call.kwargs["thread_ids"] == [42]
+    # ...as a native quote-reply that references the ORIGINAL message.
+    reply_to = call.kwargs["reply_to_message"]
+    assert reply_to is not None
+    assert getattr(reply_to, "id", None) == "m-orig"
+    assert getattr(reply_to, "client_context", None) == "ctx-orig"
+
+
+def test_send_reply_invokes_human_like_delay(tmp_path):
+    cfg = _config(tmp_path, action_delay_min_seconds=3.0, action_delay_max_seconds=3.0)
+    client = MagicMock()
+    adapter = _adapter(cfg, client)
+
+    adapter.send_reply(
+        thread_id="42",
+        text="hi",
+        original_message_id="m1",
+        original_client_context=None,
+    )
+
+    # A randomized human-like delay within [min, max] was requested before send.
+    assert adapter.recorded_sleeps
+    assert all(3.0 <= s <= 3.0 for s in adapter.recorded_sleeps)
+
+
+def test_send_reply_falls_back_to_plain_send_when_quote_reply_fails(tmp_path):
+    cfg = _config(tmp_path)
+    client = MagicMock()
+    # First (native quote-reply) call rejected; plain send accepted.
+    client.direct_send.side_effect = [Exception("reply_to_message not accepted"), SimpleNamespace()]
+    adapter = _adapter(cfg, client)
+
+    adapter.send_reply(
+        thread_id="42",
+        text="already sent by @alice",
+        original_message_id="m-orig",
+        original_client_context="ctx",
+    )
+
+    assert client.direct_send.call_count == 2
+    # The fallback still delivers the text into the thread, with NO reply_to.
+    fallback = client.direct_send.call_args_list[1]
+    assert fallback.args[0] == "already sent by @alice"
+    assert fallback.kwargs["thread_ids"] == [42]
+    assert "reply_to_message" not in fallback.kwargs
