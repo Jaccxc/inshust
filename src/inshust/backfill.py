@@ -35,6 +35,11 @@ import logging
 
 from inshust.adapter import InstagramAdapter
 from inshust.config import Config, load_config
+from inshust.logging_setup import (
+    console_challenge_code_handler,
+    console_two_factor_code_provider,
+    setup_logging,
+)
 from inshust.media_identity import extract_share
 from inshust.models import ShareEvent
 from inshust.resolver import MediaResolver
@@ -129,9 +134,13 @@ def main() -> None:  # pragma: no cover - thin console wiring, exercised via Bac
     the backfill with human-like pacing. Sends no replies. Run this by hand once,
     then ship the resulting db file to Fly.
     """
-    logging.basicConfig(level=logging.INFO)
     config = load_config()
-    adapter = InstagramAdapter(config)
+    setup_logging(config.log_level)
+    adapter = InstagramAdapter(
+        config,
+        challenge_code_handler=console_challenge_code_handler,
+        two_factor_code_provider=console_two_factor_code_provider,
+    )
     store = Store(config.db_path)
     logger.info(
         "inshust backfill starting: thread_id=%s db_path=%s cap=%s",

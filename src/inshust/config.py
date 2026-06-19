@@ -33,6 +33,7 @@ DEFAULT_SEND_BACKOFF_BASE_SECONDS = 2.0
 DEFAULT_RECONNECT_MAX_BACKOFF_SECONDS = 300.0
 DEFAULT_BACKFILL_DELAY_MIN_SECONDS = 2.0
 DEFAULT_BACKFILL_DELAY_MAX_SECONDS = 6.0
+DEFAULT_LOG_LEVEL = "INFO"
 
 
 @dataclass(frozen=True)
@@ -75,6 +76,11 @@ class Config:
     backfill_delay_min_seconds: float = DEFAULT_BACKFILL_DELAY_MIN_SECONDS
     backfill_delay_max_seconds: float = DEFAULT_BACKFILL_DELAY_MAX_SECONDS
     backfill_max_messages: int | None = None
+
+    # --- logging ---------------------------------------------------------
+    # Console log verbosity (DEBUG/INFO/WARNING/...). At DEBUG, instagrapi's
+    # per-request URL logs pass through; otherwise they are quieted to WARNING.
+    log_level: str = DEFAULT_LOG_LEVEL
 
 
 def load_config(env: Mapping[str, str] | None = None) -> Config:
@@ -129,6 +135,7 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
             env.get("BACKFILL_DELAY_MAX") or DEFAULT_BACKFILL_DELAY_MAX_SECONDS
         ),
         backfill_max_messages=_int_or_none(env.get("BACKFILL_MAX_MESSAGES")),
+        log_level=env.get("LOG_LEVEL") or DEFAULT_LOG_LEVEL,
     )
 
 
