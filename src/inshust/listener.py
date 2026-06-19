@@ -127,7 +127,12 @@ class Listener:
         (``"sent"``/``"fallback"``) becomes the structured outcome; a double
         that returns ``None`` is treated as ``"sent"``.
         """
-        text = format_reply(original, self._config.timezone)
+        text = format_reply(
+            original,
+            duplicate_username=event.sender_username,
+            duplicate_sent_at=event.timestamp,
+            tz=self._config.timezone,
+        )
         try:
             outcome = self._client.send_reply(
                 thread_id=event.thread_id,
