@@ -127,3 +127,10 @@ class InstagramAdapter:
         if Path(self._config.session_path).exists():
             self._client.load_settings(self._config.session_path)
             return
+
+        self._fresh_login()
+        self._client.dump_settings(self._config.session_path)
+
+    def _fresh_login(self) -> None:
+        """Authenticate with credentials (no persisted session available)."""
+        self._client.login(self._config.username, self._config.password)
