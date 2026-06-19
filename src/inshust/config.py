@@ -4,9 +4,10 @@ No business logic. ``load_config`` reads from a supplied ``env`` mapping
 (tests pass one explicitly) or, by default, from the process environment after
 loading a ``.env`` file via python-dotenv.
 
-This slice only *uses* ``thread_id``, ``db_path`` and ``timezone``. The
-credential/session/proxy/poll fields are populated as a forward seam for cards
-#3-#6 but are not consumed yet.
+The dedupe pipeline uses ``thread_id``, ``db_path`` and ``timezone``. The
+auth/session/proxy/locale/pacing/poll fields drive the instagrapi adapter
+(card #3). The realtime/backfill seams (cards #4-#6) extend this without
+rewrites.
 """
 
 from __future__ import annotations
@@ -21,6 +22,11 @@ DEFAULT_DB_PATH = "./data/inshust.db"
 DEFAULT_TIMEZONE = "Asia/Taipei"
 DEFAULT_SESSION_PATH = "./data/session.json"
 DEFAULT_POLL_INTERVAL_SECONDS = 45
+DEFAULT_ACTION_DELAY_MIN_SECONDS = 2.0
+DEFAULT_ACTION_DELAY_MAX_SECONDS = 6.0
+DEFAULT_CHALLENGE_BACKOFF_SECONDS = 300.0
+DEFAULT_LOCALE = "en_US"
+DEFAULT_POLL_AMOUNT = 20
 
 
 @dataclass(frozen=True)
@@ -41,7 +47,12 @@ class Config:
     totp_seed: str | None = None
     session_path: str = DEFAULT_SESSION_PATH
     proxy: str | None = None
+    locale: str = DEFAULT_LOCALE
     poll_interval_seconds: int = DEFAULT_POLL_INTERVAL_SECONDS
+    poll_amount: int = DEFAULT_POLL_AMOUNT
+    action_delay_min_seconds: float = DEFAULT_ACTION_DELAY_MIN_SECONDS
+    action_delay_max_seconds: float = DEFAULT_ACTION_DELAY_MAX_SECONDS
+    challenge_backoff_seconds: float = DEFAULT_CHALLENGE_BACKOFF_SECONDS
 
 
 def load_config(env: Mapping[str, str] | None = None) -> Config:
@@ -68,7 +79,18 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
         totp_seed=_opt("IG_TOTP_SEED"),
         session_path=env.get("IG_SESSION_PATH") or DEFAULT_SESSION_PATH,
         proxy=_opt("IG_PROXY"),
+        locale=env.get("IG_LOCALE") or DEFAULT_LOCALE,
         poll_interval_seconds=int(
             env.get("POLL_INTERVAL_SECONDS") or DEFAULT_POLL_INTERVAL_SECONDS
+        ),
+        poll_amount=int(env.get("POLL_AMOUNT") or DEFAULT_POLL_AMOUNT),
+        action_delay_min_seconds=float(
+            env.get("ACTION_DELAY_MIN_SECONDS") or DEFAULT_ACTION_DELAY_MIN_SECONDS
+        ),
+        action_delay_max_seconds=float(
+            env.get("ACTION_DELAY_MAX_SECONDS") or DEFAULT_ACTION_DELAY_MAX_SECONDS
+        ),
+        challenge_backoff_seconds=float(
+            env.get("CHALLENGE_BACKOFF_SECONDS") or DEFAULT_CHALLENGE_BACKOFF_SECONDS
         ),
     )

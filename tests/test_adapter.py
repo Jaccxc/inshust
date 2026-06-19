@@ -10,11 +10,9 @@ delegation, and polling that feeds Listener.handle_message end-to-end.
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
-
 from instagrapi.exceptions import ChallengeRequired, TwoFactorRequired
 
 from inshust.adapter import InstagramAdapter, OperatorPausedError

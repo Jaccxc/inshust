@@ -35,13 +35,11 @@ from __future__ import annotations
 
 import logging
 import random
+from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, Protocol
+from typing import Protocol
 
 from inshust.config import Config
-
-if TYPE_CHECKING:  # pragma: no cover - typing only
-    from inshust.listener import Listener
 
 logger = logging.getLogger(__name__)
 
@@ -124,12 +122,17 @@ class InstagramAdapter:
         Reuse path: if the session file exists, ``load_settings`` it and return
         without a fresh network login. Otherwise authenticate with credentials.
         """
-        if Path(self._config.session_path).exists():
-            self._client.load_settings(self._config.session_path)
-            return
+        from instagrapi.exceptions import ChallengeError
 
-        self._fresh_login()
-        self._client.dump_settings(self._config.session_path)
+        try:
+            if Path(self._config.session_path).exists():
+                self._client.load_settings(self._config.session_path)
+                return
+
+            self._fresh_login()
+            self._client.dump_settings(self._config.session_path)
+        except ChallengeError as exc:
+            self._pause_on_challenge(exc)
 
     def _fresh_login(self) -> None:
         """Authenticate with credentials (no persisted session available).
@@ -148,3 +151,57 @@ class InstagramAdapter:
                 self._config.password,
                 verification_code=code,
             )
+
+    def _pause_on_challenge(self, exc: Exception) -> None:
+        """Enter the paused state on a challenge/checkpoint: alert + back off.
+
+        Logs a prominent (CRITICAL) operator alert, marks the bot paused, backs
+        off ONCE, then raises :class:`OperatorPausedError`. Deliberately does
+        NOT retry/loop — an Instagram checkpoint needs a human, and hammering it
+        raises the ban risk this whole design is built to avoid.
+        """
+        self._paused = True
+        logger.critical(
+            "INSTAGRAM CHALLENGE/CHECKPOINT — bot PAUSED, operator action required: %s",
+            exc,
+        )
+        self._sleep(self._config.challenge_backoff_seconds)
+        raise OperatorPausedError(str(exc)) from exc
+
+    # --- pacing ----------------------------------------------------------
+    def _sleep(self, seconds: float) -> None:
+        """Sleep via the injectable sleeper (real ``time.sleep`` by default)."""
+        if self._sleeper is not None:
+            self._sleeper(seconds)
+        else:  # pragma: no cover - exercised only with the real default
+            import time
+
+            time.sleep(seconds)
+
+    def _delay(self) -> None:
+        """Pause a randomized human-like interval within the configured range."""
+        low = self._config.action_delay_min_seconds
+        high = self._config.action_delay_max_seconds
+        self._sleep(self._rng.uniform(low, high))
+
+    def _ensure_active(self) -> None:
+        """Refuse to act while paused (a challenge needs a human first)."""
+        if self._paused:
+            raise OperatorPausedError("bot is paused awaiting operator action")
+
+    # --- ClientPort: sending ---------------------------------------------
+    def send_reply(
+        self,
+        thread_id: str,
+        text: str,
+        original_message_id: str,
+        original_client_context: str | None,
+    ) -> None:
+        """Send ``text`` into ``thread_id`` (paused bot refuses to send)."""
+        self._ensure_active()
+
+    # --- ClientPort: resolution ------------------------------------------
+    def resolve_media_pk_from_url(self, url: str) -> str:
+        """Resolve a share ``url`` to its canonical media ``pk``."""
+        self._ensure_active()
+        return str(self._client.media_pk_from_url(url))
