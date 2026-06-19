@@ -235,3 +235,19 @@ def test_send_reply_falls_back_to_plain_send_when_quote_reply_fails(tmp_path):
     assert fallback.args[0] == "already sent by @alice"
     assert fallback.kwargs["thread_ids"] == [42]
     assert "reply_to_message" not in fallback.kwargs
+
+
+# --- resolve_media_pk_from_url: delegate + delay ---------------------------
+
+
+def test_resolve_media_pk_delegates_to_client(tmp_path):
+    cfg = _config(tmp_path)
+    client = MagicMock()
+    client.media_pk_from_url.return_value = 123456789
+    adapter = _adapter(cfg, client)
+
+    pk = adapter.resolve_media_pk_from_url("https://www.instagram.com/reel/CzAbc/")
+
+    client.media_pk_from_url.assert_called_once_with("https://www.instagram.com/reel/CzAbc/")
+    assert pk == "123456789"  # normalized to str for the canonical MediaKey
+    assert adapter.recorded_sleeps  # spaced by a human-like delay too
