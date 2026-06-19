@@ -27,6 +27,9 @@ DEFAULT_ACTION_DELAY_MAX_SECONDS = 6.0
 DEFAULT_CHALLENGE_BACKOFF_SECONDS = 300.0
 DEFAULT_LOCALE = "en_US"
 DEFAULT_POLL_AMOUNT = 20
+DEFAULT_SEND_MAX_RETRIES = 3
+DEFAULT_SEND_BACKOFF_BASE_SECONDS = 2.0
+DEFAULT_RECONNECT_MAX_BACKOFF_SECONDS = 300.0
 
 
 @dataclass(frozen=True)
@@ -53,6 +56,13 @@ class Config:
     action_delay_min_seconds: float = DEFAULT_ACTION_DELAY_MIN_SECONDS
     action_delay_max_seconds: float = DEFAULT_ACTION_DELAY_MAX_SECONDS
     challenge_backoff_seconds: float = DEFAULT_CHALLENGE_BACKOFF_SECONDS
+
+    # --- resilience (card #6) --------------------------------------------
+    # Retry count + exponential backoff base for transient group-send 500s,
+    # and the cap on the realtime reconnect backoff so it never grows unbounded.
+    send_max_retries: int = DEFAULT_SEND_MAX_RETRIES
+    send_backoff_base_seconds: float = DEFAULT_SEND_BACKOFF_BASE_SECONDS
+    reconnect_max_backoff_seconds: float = DEFAULT_RECONNECT_MAX_BACKOFF_SECONDS
 
 
 def load_config(env: Mapping[str, str] | None = None) -> Config:
@@ -92,5 +102,12 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
         ),
         challenge_backoff_seconds=float(
             env.get("CHALLENGE_BACKOFF_SECONDS") or DEFAULT_CHALLENGE_BACKOFF_SECONDS
+        ),
+        send_max_retries=int(env.get("SEND_MAX_RETRIES") or DEFAULT_SEND_MAX_RETRIES),
+        send_backoff_base_seconds=float(
+            env.get("SEND_BACKOFF_BASE_SECONDS") or DEFAULT_SEND_BACKOFF_BASE_SECONDS
+        ),
+        reconnect_max_backoff_seconds=float(
+            env.get("RECONNECT_MAX_BACKOFF_SECONDS") or DEFAULT_RECONNECT_MAX_BACKOFF_SECONDS
         ),
     )

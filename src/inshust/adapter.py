@@ -55,6 +55,56 @@ class OperatorPausedError(Exception):
     """
 
 
+class SendFailedError(Exception):
+    """Raised when a group send keeps failing after the retry budget is spent.
+
+    A *transient* group-send 500 (documented on ``direct_v2/threads/broadcast/
+    text/``) is retried with exponential backoff; if it never succeeds the
+    adapter gives up and raises this so the orchestration can LOG the failed
+    reply outcome and keep the run loop alive instead of crashing.
+    """
+
+
+def _is_transient_send_error(exc: Exception) -> bool:
+    """Classify a send error as a documented transient group-send failure.
+
+    The PRD calls out ``direct_v2/threads/broadcast/text/`` 500s as the flaky
+    case worth retrying. instagrapi surfaces these (plus connection drops,
+    timeouts, throttles and malformed-JSON 5xx bodies) as ``ClientError``
+    subclasses, so the transient set is ``ClientError`` and anything carrying a
+    5xx / timeout / throttle signature. A native quote-reply *rejection* (the
+    server refusing the ``reply_to_message`` shape) is NOT transient — that
+    keeps flowing to the plaintext fallback, unchanged from card #3.
+    """
+    from instagrapi.exceptions import (
+        ClientConnectionError,
+        ClientJSONDecodeError,
+        ClientRequestTimeout,
+        ClientThrottledError,
+    )
+
+    if isinstance(
+        exc,
+        (
+            ClientConnectionError,
+            ClientRequestTimeout,
+            ClientThrottledError,
+            ClientJSONDecodeError,
+        ),
+    ):
+        return True
+
+    from instagrapi.exceptions import ClientError
+
+    if isinstance(exc, ClientError):
+        text = str(exc).lower()
+        return any(
+            marker in text
+            for marker in ("500", "502", "503", "504", "broadcast", "timeout", "throttl")
+        )
+    return False
+
+
 class _InstagrapiClient(Protocol):
     """The slice of ``instagrapi.Client`` this adapter actually uses."""
 
@@ -411,9 +461,14 @@ class InstagramAdapter:
         delivers the text into the thread.
 
         A paused bot refuses to send. Each send is preceded by a randomized
-        human-like delay. Retry/backoff on transient send errors is card #5 —
-        the fallback here is the quote-reply-vs-plain seam, not retry; a single
-        clean ``_send`` choke point is left for #5 to wrap.
+        human-like delay. Transient group-send 500s (documented on
+        ``direct_v2/threads/broadcast/text/``) are retried with exponential
+        backoff at the ``_send_with_retry`` choke point; a NON-transient error
+        on the native quote-reply (e.g. the server rejecting the
+        ``reply_to_message`` shape) falls back to a plain send. A persistent
+        transient failure exhausts the retry budget and raises
+        :class:`SendFailedError` so the caller can log it and keep the loop
+        alive instead of crashing.
         """
         self._ensure_active()
         thread_ids = [int(thread_id)]
@@ -422,17 +477,62 @@ class InstagramAdapter:
         reply_to = self._build_reply_to(original_message_id, original_client_context)
         if reply_to is not None:
             try:
-                self._client.direct_send(text, thread_ids=thread_ids, reply_to_message=reply_to)
+                self._send_with_retry(text, thread_ids=thread_ids, reply_to_message=reply_to)
                 return
+            except SendFailedError:
+                # The native path kept hitting transient 500s; let the caller
+                # decide (it logs a "failed" outcome). Re-raise rather than mask
+                # a persistent outage as a quote-reply rejection.
+                raise
             except Exception:
                 logger.warning(
-                    "native quote-reply failed for message %s; falling back to plain send",
+                    "native quote-reply rejected for message %s; falling back to plain send",
                     original_message_id,
                     exc_info=True,
                 )
 
-        # Fallback: a plain send that still delivers the text.
-        self._client.direct_send(text, thread_ids=thread_ids)
+        # Fallback: a plain send that still delivers the text (also retried).
+        self._send_with_retry(text, thread_ids=thread_ids)
+
+    def _send_with_retry(self, text: str, *, thread_ids: list[int], reply_to_message=None) -> None:
+        """Send once, retrying documented transient group-send 500s w/ backoff.
+
+        On a transient error (see :func:`_is_transient_send_error`) it sleeps an
+        exponentially-growing backoff (``base * 2**attempt``) and retries, up to
+        ``config.send_max_retries`` retries after the initial attempt. A
+        NON-transient error propagates immediately (so ``send_reply`` can fall
+        back to a plain send). A persistent transient failure that exhausts the
+        budget raises :class:`SendFailedError`. The backoff sleep goes through
+        the injectable sleeper so tests assert the schedule without sleeping.
+        """
+        attempt = 0
+        while True:
+            try:
+                if reply_to_message is not None:
+                    self._client.direct_send(
+                        text, thread_ids=thread_ids, reply_to_message=reply_to_message
+                    )
+                else:
+                    self._client.direct_send(text, thread_ids=thread_ids)
+                return
+            except Exception as exc:
+                if not _is_transient_send_error(exc):
+                    raise
+                if attempt >= self._config.send_max_retries:
+                    logger.warning(
+                        "group send still failing after %d retries; giving up",
+                        self._config.send_max_retries,
+                        exc_info=True,
+                    )
+                    raise SendFailedError(str(exc)) from exc
+                backoff = self._config.send_backoff_base_seconds * (2**attempt)
+                logger.info(
+                    "transient group-send error (attempt %d); backing off %.1fs and retrying",
+                    attempt + 1,
+                    backoff,
+                )
+                self._sleep(backoff)
+                attempt += 1
 
     @staticmethod
     def _build_reply_to(original_message_id: str, original_client_context: str | None):
