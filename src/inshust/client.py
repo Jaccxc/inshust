@@ -34,6 +34,16 @@ class ClientPort(Protocol):
         """
         ...
 
+    def resolve_media_pk_from_url(self, url: str) -> str:
+        """Resolve a share ``url`` to its canonical media ``pk``.
+
+        Used for url-only xma shares. The real instagrapi adapter (card #3)
+        implements this via ``media_pk_from_url``; it must raise on an
+        unresolvable url so the caller can skip that message gracefully. The
+        media resolver caches the result so a repeated url needs no 2nd call.
+        """
+        ...
+
 
 @dataclass(frozen=True)
 class SentReply:
@@ -46,10 +56,17 @@ class SentReply:
 
 
 class FakeClient:
-    """In-memory ClientPort that records sent replies; no network."""
+    """In-memory ClientPort that records sent replies; no network.
 
-    def __init__(self) -> None:
+    ``url_to_pk`` is the scripted resolution map for url-only xma shares;
+    ``resolve_calls`` counts how many times the client was actually asked to
+    resolve, so caching tests can assert a repeated url needs no 2nd call.
+    """
+
+    def __init__(self, url_to_pk: dict[str, str] | None = None) -> None:
         self.sent: list[SentReply] = []
+        self._url_to_pk: dict[str, str] = dict(url_to_pk or {})
+        self.resolve_calls = 0
 
     def send_reply(
         self,
@@ -66,3 +83,11 @@ class FakeClient:
                 original_client_context=original_client_context,
             )
         )
+
+    def resolve_media_pk_from_url(self, url: str) -> str:
+        """Resolve ``url`` from the scripted map; raise if unknown."""
+        self.resolve_calls += 1
+        try:
+            return self._url_to_pk[url]
+        except KeyError as exc:
+            raise KeyError(f"FakeClient cannot resolve url: {url}") from exc
