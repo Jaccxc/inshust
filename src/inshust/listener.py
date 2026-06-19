@@ -117,6 +117,9 @@ class Listener:
     def _reply_to_duplicate(self, event: ShareEvent, original: SeenRecord) -> None:
         """Send the duplicate call-out and log its outcome (never crash).
 
+        Quote-replies attach to the canonical first-share message (``original``),
+        not the duplicate that triggered this call-out.
+
         The adapter retries transient group-send 500s internally; a PERSISTENT
         failure surfaces as :class:`SendFailedError`, which is caught here and
         logged as a ``"failed"`` reply outcome so the surrounding run loop
@@ -129,8 +132,8 @@ class Listener:
             outcome = self._client.send_reply(
                 thread_id=event.thread_id,
                 text=text,
-                original_message_id=event.message_id,
-                original_client_context=event.client_context,
+                original_message_id=original.original_message_id,
+                original_client_context=original.original_client_context,
             )
         except SendFailedError:
             logger.error(

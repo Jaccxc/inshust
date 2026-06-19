@@ -31,9 +31,11 @@ class ClientPort(Protocol):
         The real adapter uses native quote-reply (``reply_to_message``) keyed by
         ``original_message_id``/``original_client_context`` when possible, with a
         plaintext fallback, retrying documented transient group-send 500s with
-        backoff. It returns the outcome (``"sent"``/``"fallback"``) for the
-        listener's structured log, and raises ``SendFailedError`` on a persistent
-        failure. A double whose return value is ``None`` is treated as ``"sent"``.
+        backoff. These identify the **first-share** message to quote-reply to,
+        not the duplicate that triggered the call-out. Returns the outcome
+        (``"sent"``/``"fallback"``) for the listener's structured log, and raises
+        ``SendFailedError`` on a persistent failure. A double whose return value
+        is ``None`` is treated as ``"sent"``.
         """
         ...
 

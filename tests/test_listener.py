@@ -120,7 +120,7 @@ def test_two_identical_shares_yield_exactly_one_reply(tmp_path):
     reply = client.sent[0]
     assert "@alice" in reply.text  # first sender, not the re-sharer
     assert "2023-11-15 06:13" in reply.text  # localized first-seen time
-    assert reply.original_message_id == "m2"  # quotes the new (duplicate) share
+    assert reply.original_message_id == "m1"  # quotes the first share
 
 
 def test_first_seen_is_silent(tmp_path):
@@ -186,7 +186,7 @@ def test_clip_then_same_reel_as_xma_dedupes_to_one_reply(tmp_path):
     assert len(client.sent) == 1  # recognized as a duplicate of the clip
     reply = client.sent[0]
     assert "@alice" in reply.text  # the original (clip) sender
-    assert reply.original_message_id == "m2"  # quotes the new xma share
+    assert reply.original_message_id == "m1"  # quotes the first (clip) share
 
 
 def test_xma_first_then_same_reel_as_clip_dedupes(tmp_path):
