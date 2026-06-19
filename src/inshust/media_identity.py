@@ -4,18 +4,22 @@
 duck-typed message (only the attributes named below) and returns a
 :class:`ShareRef` when the message carries a reel/post, else ``None``.
 
-This slice handles the two simplest forms, ``clip`` and ``media_share``, which
-both carry a full Media object exposing ``.pk`` and ``.code``. Richer
-URL-only ``xma_share``/``generic_xma`` forms are intentionally out of scope
-here; card #3 adds them at the seam marked below by returning a ShareRef that
-carries a ``url`` instead of a ``pk`` (the resolver then turns it into a pk).
+``clip`` and ``media_share`` both carry a full Media object exposing ``.pk`` and
+``.code``, so their ShareRef is already canonical. The richer URL-only
+``xma_share``/``generic_xma`` forms carry a share URL but no pk: those yield a
+ShareRef with ``url`` set and ``pk``/``shortcode`` left ``None``; the media
+resolver (card #4) turns that url into a pk so the same reel dedupes whether it
+was shared as a clip or as an xma card.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from inshust.models import MEDIA_TYPE_CLIP, MEDIA_TYPE_FEED
+from inshust.models import MEDIA_TYPE_CLIP, MEDIA_TYPE_FEED, MEDIA_TYPE_XMA
+
+# instagrapi item_type values for rich URL-only share cards.
+_XMA_ITEM_TYPES = frozenset({"xma_share", "generic_xma", "xma_media_share"})
 
 
 @dataclass(frozen=True)
@@ -46,11 +50,34 @@ def _from_media(media: object, media_type: str) -> ShareRef | None:
     )
 
 
+def _xma_url(message: object) -> str | None:
+    """Extract the share URL from an xma message, or ``None`` if absent.
+
+    Mirrors instagrapi: ``xma_share`` is a single ``MediaXma`` and
+    ``generic_xma`` is a list of them; both expose the share URL on
+    ``video_url``. We also accept a plain ``url`` attribute so the resolver
+    seam stays easy to drive from fakes.
+    """
+    candidates = []
+    xma_share = getattr(message, "xma_share", None)
+    if xma_share is not None:
+        candidates.append(xma_share)
+    generic = getattr(message, "generic_xma", None)
+    if generic:
+        candidates.extend(generic)
+
+    for xma in candidates:
+        url = getattr(xma, "url", None) or getattr(xma, "video_url", None)
+        if url:
+            return str(url)
+    return None
+
+
 def extract_share(message: object) -> ShareRef | None:
     """Return a :class:`ShareRef` for reel/post shares, else ``None``.
 
-    ``message`` is duck-typed: we only read ``item_type``, ``clip`` and
-    ``media_share``.
+    ``message`` is duck-typed: we only read ``item_type``, ``clip``,
+    ``media_share`` and the xma fields (``xma_share``/``generic_xma``).
     """
     item_type = getattr(message, "item_type", None)
 
@@ -64,9 +91,10 @@ def extract_share(message: object) -> ShareRef | None:
         if media_share is not None:
             return _from_media(media_share, MEDIA_TYPE_FEED)
 
-    # --- xma seam (card #3) ----------------------------------------------
-    # item_type in {"xma_share", "generic_xma", "xma_media_share"} carries a
-    # URL only. Detect it here and return a ShareRef(url=..., pk=None); the
-    # media resolver will turn the URL into a pk. Not handled in this slice.
+    if item_type in _XMA_ITEM_TYPES:
+        url = _xma_url(message)
+        if url is not None:
+            # URL-only: pk/shortcode stay None until the resolver fills them.
+            return ShareRef(pk=None, shortcode=None, media_type=MEDIA_TYPE_XMA, url=url)
 
     return None
