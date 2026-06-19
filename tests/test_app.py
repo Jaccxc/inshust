@@ -19,12 +19,36 @@ def test_build_listener_assembles_the_pipeline(tmp_path):
     assert isinstance(listener, Listener)
 
 
-def test_main_is_callable_and_runs_without_network():
+def test_main_runs_the_poll_loop_without_touching_the_network(monkeypatch, tmp_path):
+    """``main`` wires config -> adapter -> poll loop. No real client/network.
+
+    We stub the adapter and the loop so the entry point is exercised end-to-end
+    without constructing a real instagrapi client or sleeping.
+    """
     import inshust
+    import inshust.app as app
 
     assert callable(inshust.main)
-    # Should not raise or hit the network (no login in this slice).
+
+    monkeypatch.setattr(
+        app, "load_config", lambda: Config(thread_id="42", db_path=str(tmp_path / "db.sqlite"))
+    )
+    fake_adapter = MagicMock()
+    monkeypatch.setattr(app, "InstagramAdapter", lambda config: fake_adapter)
+
+    calls = {}
+
+    def fake_loop(adapter, listener, *, config, **kwargs):
+        calls["adapter"] = adapter
+        calls["listener"] = listener
+
+    monkeypatch.setattr(app, "run_poll_loop", fake_loop)
+
     inshust.main()
+
+    # The real instagrapi adapter (our stub) is handed to the poll loop.
+    assert calls["adapter"] is fake_adapter
+    assert isinstance(calls["listener"], Listener)
 
 
 def test_run_poll_loop_logs_in_then_polls_each_interval(tmp_path):
