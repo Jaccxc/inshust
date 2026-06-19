@@ -240,3 +240,94 @@ def test_persistent_send_failure_is_logged_and_loop_survives(tmp_path, caplog):
     # ...and the message is still marked processed (so it is not retried forever
     # on the next poll) -- the loop moved on cleanly.
     assert store.is_processed("m2") is True
+
+
+# --- (b) run loop recovers from a dropped connection (reconnect + backoff) ---
+
+from instagrapi.exceptions import ClientConnectionError  # noqa: E402
+
+from inshust.app import run_poll_loop  # noqa: E402
+
+
+def test_run_loop_recovers_from_dropped_connection_with_backoff(tmp_path):
+    """A dropped connection mid-poll must NOT kill the loop.
+
+    The first poll raises a transient ``ClientConnectionError`` (simulating the
+    realtime/poll transport dropping); the loop must back off, reconnect, and
+    keep polling on the next cycle instead of crashing. Driven by an injected
+    finite ``should_continue`` + recording sleeper so there is no real network
+    or sleeping.
+    """
+    cfg = _config(tmp_path, poll_interval_seconds=45, reconnect_max_backoff_seconds=300.0)
+    adapter = MagicMock()
+    # Cycle 1 drops the connection; cycle 2 recovers and polls cleanly.
+    adapter.poll_once.side_effect = [ClientConnectionError("connection dropped"), None]
+    listener = object()
+
+    sleeps: list[float] = []
+    cycles = {"n": 0}
+
+    def should_continue() -> bool:
+        cycles["n"] += 1
+        return cycles["n"] <= 2
+
+    # Must NOT raise: the loop survives the dropped connection.
+    run_poll_loop(
+        adapter,
+        listener,
+        config=cfg,
+        sleeper=sleeps.append,
+        should_continue=should_continue,
+        login=False,
+    )
+
+    # Polled twice (the drop did not stop the loop).
+    assert adapter.poll_once.call_count == 2
+    # Recovered by reconnecting realtime after the drop.
+    adapter.connect_realtime.assert_called_with(listener)
+    assert adapter.connect_realtime.called
+    # Backed off after the drop (a reconnect backoff was requested in addition
+    # to the normal poll-interval sleeps).
+    assert any(s not in (cfg.poll_interval_seconds,) for s in sleeps)
+
+
+def test_run_loop_reconnect_backoff_is_capped_and_resets_on_success(tmp_path):
+    """Repeated drops grow the backoff exponentially but cap it; a clean poll
+    resets it so a later drop starts low again."""
+    cfg = _config(
+        tmp_path,
+        poll_interval_seconds=45,
+        send_backoff_base_seconds=1.0,
+        reconnect_max_backoff_seconds=4.0,
+    )
+    adapter = MagicMock()
+    # drop, drop, drop (exceeds the cap), then a clean poll, then drop again.
+    adapter.poll_once.side_effect = [
+        ClientConnectionError("drop1"),
+        ClientConnectionError("drop2"),
+        ClientConnectionError("drop3"),
+        None,
+        ClientConnectionError("drop4"),
+    ]
+    listener = object()
+    sleeps: list[float] = []
+    cycles = {"n": 0}
+
+    def should_continue() -> bool:
+        cycles["n"] += 1
+        return cycles["n"] <= 5
+
+    run_poll_loop(
+        adapter,
+        listener,
+        config=cfg,
+        sleeper=sleeps.append,
+        should_continue=should_continue,
+        login=False,
+    )
+
+    # The reconnect backoffs (the sleeps that are NOT the poll interval).
+    backoffs = [s for s in sleeps if s != cfg.poll_interval_seconds]
+    # drop1->1, drop2->2, drop3->4 (capped at 4, not 8), then reset on the clean
+    # poll, so drop4 starts low again at 1.
+    assert backoffs == [1.0, 2.0, 4.0, 1.0]
