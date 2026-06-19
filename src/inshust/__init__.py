@@ -1,7 +1,11 @@
+from inshust.app import run as _run
+
+
 def main() -> None:
     """Console entry point.
 
-    The bot's wiring (auth, history backfill, realtime/poll listener, dedupe,
-    reply) is implemented feature-by-feature via TDD — see the PRD and README.
+    Delegates to :func:`inshust.app.run`. This slice loads config and reports
+    the wired walking skeleton; auth + realtime/poll listener land in later
+    cards (see the PRD and README).
     """
-    print("inshust: Instagram group reel/post dedupe bot — not yet wired. See README.md")
+    _run()
