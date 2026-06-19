@@ -30,7 +30,12 @@ below are the authoritative, project-adapted set and supersede the generic ones.
 3. **TDD is mandatory.** Tracer-bullet vertical slices: one failing test (RED) → minimal
    code to pass (GREEN) → refactor when green → repeat. Do NOT write a pile of tests then
    a pile of code. Tests assert **behavior through public interfaces**, never
-   implementation details. The commit history must visibly show the RED→GREEN cadence.
+   implementation details. **Strongly preferred:** commit each failing test as its own
+   commit (so RED is visible in history) before the implementation commit that turns it
+   GREEN — do this going forward. The **decisive** bar, however, is that tests are
+   genuine, behavior-level, and written test-first; reviewers must not FAIL a card *solely*
+   on commit choreography when the tests are real behavior tests and all acceptance
+   criteria are met.
 4. **No live network in tests.** `instagrapi.Client` is ALWAYS mocked or replaced by a
    fake. No test logs into Instagram or hits the network. The real account is only for
    manual E2E (cards #9/#10), never these cards.
