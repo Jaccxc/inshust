@@ -52,6 +52,10 @@ class Config:
     username: str | None = None
     password: str | None = None
     totp_seed: str | None = None
+    # Optional browser ``sessionid`` cookie. When set, the adapter logs in via
+    # ``login_by_sessionid`` — bypassing the password login + checkpoint flow —
+    # which is the reliable way past a hard login challenge on a fresh IP.
+    sessionid: str | None = None
     session_path: str = DEFAULT_SESSION_PATH
     proxy: str | None = None
     locale: str = DEFAULT_LOCALE
@@ -105,6 +109,7 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
         username=_opt("IG_USERNAME"),
         password=_opt("IG_PASSWORD"),
         totp_seed=_opt("IG_TOTP_SEED"),
+        sessionid=_opt("IG_SESSIONID"),
         session_path=env.get("IG_SESSION_PATH") or DEFAULT_SESSION_PATH,
         proxy=_opt("IG_PROXY"),
         locale=env.get("IG_LOCALE") or DEFAULT_LOCALE,

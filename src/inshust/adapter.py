@@ -125,6 +125,8 @@ class _InstagrapiClient(Protocol):
 
     def dump_settings(self, path: str) -> bool: ...
 
+    def login_by_sessionid(self, sessionid: str) -> bool: ...
+
     def totp_generate_code(self, seed: str) -> str: ...
 
     def set_proxy(self, dsn: str | None) -> None: ...
@@ -394,8 +396,13 @@ class InstagramAdapter:
                 logger.info("reusing saved session at %s", self._config.session_path)
                 return
 
-            self._fresh_login()
+            if self._config.sessionid:
+                logger.info("logging in via IG_SESSIONID (bypasses password + checkpoint)")
+                self._client.login_by_sessionid(self._config.sessionid)
+            else:
+                self._fresh_login()
             self._client.dump_settings(self._config.session_path)
+            logger.info("session established and saved to %s", self._config.session_path)
         except ChallengeError as exc:
             self._pause_on_challenge(exc)
 

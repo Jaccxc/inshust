@@ -76,3 +76,28 @@ def test_two_factor_prefers_totp_seed_over_interactive_provider(tmp_path):
     client.totp_generate_code.assert_called_once_with("SEED123")
     provider.assert_not_called()
     assert client.login.call_args_list[1].kwargs["verification_code"] == "135790"
+
+
+def test_login_by_sessionid_used_when_configured(tmp_path):
+    client = MagicMock()
+    adapter = InstagramAdapter(
+        _cfg(tmp_path, sessionid="SID-ABC"),
+        client=client,
+        sleeper=lambda s: None,
+    )
+    adapter.login()
+    client.login_by_sessionid.assert_called_once_with("SID-ABC")
+    client.login.assert_not_called()  # no password login / checkpoint flow
+    client.dump_settings.assert_called_once()  # session persisted for reuse
+
+
+def test_sessionid_takes_precedence_over_password(tmp_path):
+    client = MagicMock()
+    adapter = InstagramAdapter(
+        _cfg(tmp_path, sessionid="SID-XYZ"),  # username/password also set by _cfg
+        client=client,
+        sleeper=lambda s: None,
+    )
+    adapter.login()
+    client.login_by_sessionid.assert_called_once_with("SID-XYZ")
+    client.login.assert_not_called()
