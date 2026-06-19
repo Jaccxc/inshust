@@ -36,7 +36,7 @@ from inshust.client import ClientPort
 from inshust.config import Config
 from inshust.dedupe import dedupe
 from inshust.media_identity import extract_share
-from inshust.models import DUPLICATE, MediaKey, ShareEvent
+from inshust.models import DUPLICATE, MediaKey, SeenRecord, ShareEvent
 from inshust.reply import format_reply
 from inshust.resolver import MediaResolver
 from inshust.store import Store
@@ -109,7 +109,7 @@ class Listener:
         # 6. always mark processed last
         self._store.mark_processed(message_id)
 
-    def _reply_to_duplicate(self, event: ShareEvent, original: object) -> None:
+    def _reply_to_duplicate(self, event: ShareEvent, original: SeenRecord) -> None:
         """Send the duplicate call-out and log its outcome (never crash).
 
         The adapter retries transient group-send 500s internally; a PERSISTENT
