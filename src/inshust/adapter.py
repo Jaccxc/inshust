@@ -268,6 +268,12 @@ class InstagramAdapter:
 
     # --- ClientPort: resolution ------------------------------------------
     def resolve_media_pk_from_url(self, url: str) -> str:
-        """Resolve a share ``url`` to its canonical media ``pk``."""
+        """Resolve a share ``url`` to its canonical media ``pk``.
+
+        Delegates to ``client.media_pk_from_url`` and normalizes the result to
+        ``str`` for the canonical :class:`~inshust.models.MediaKey`. Spaced by a
+        human-like delay; refuses while paused.
+        """
         self._ensure_active()
+        self._delay()
         return str(self._client.media_pk_from_url(url))
