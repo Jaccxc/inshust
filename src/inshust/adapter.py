@@ -79,6 +79,95 @@ class _InstagrapiClient(Protocol):
     def media_pk_from_url(self, url: str) -> str: ...
 
 
+def _to_epoch(timestamp: object) -> int:
+    """Coerce an instagrapi ``timestamp`` to epoch seconds (UTC int).
+
+    instagrapi exposes ``DirectMessage.timestamp`` as a ``datetime``; tolerate
+    an already-numeric epoch too so the seam is robust to fakes/raw payloads.
+    """
+    if hasattr(timestamp, "timestamp"):
+        return int(timestamp.timestamp())  # datetime -> epoch seconds
+    try:
+        return int(timestamp)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0
+
+
+class NormalizedMessage:
+    """A duck-typed message carrying exactly what the pipeline reads.
+
+    The listener + ``extract_share`` read ``id``/``item_type``/``clip``/
+    ``media_share``/the xma fields plus ``user_id``/``username``/``timestamp``
+    (epoch int)/``client_context``. This adapts an instagrapi ``DirectMessage``
+    (whose ``timestamp`` is a ``datetime`` and which carries no username) to
+    that shape, so the orchestration never sees an instagrapi type directly.
+    """
+
+    __slots__ = (
+        "id",
+        "user_id",
+        "username",
+        "item_type",
+        "timestamp",
+        "client_context",
+        "clip",
+        "media_share",
+        "xma_share",
+        "generic_xma",
+    )
+
+    def __init__(
+        self,
+        *,
+        id: str,
+        user_id: str,
+        username: str,
+        item_type: str | None,
+        timestamp: int,
+        client_context: str | None,
+        clip: object,
+        media_share: object,
+        xma_share: object,
+        generic_xma: object,
+    ) -> None:
+        self.id = id
+        self.user_id = user_id
+        self.username = username
+        self.item_type = item_type
+        self.timestamp = timestamp
+        self.client_context = client_context
+        self.clip = clip
+        self.media_share = media_share
+        self.xma_share = xma_share
+        self.generic_xma = generic_xma
+
+
+def normalize_direct_message(
+    dm: object, users_by_id: dict[str, str] | None = None
+) -> NormalizedMessage:
+    """Adapt an instagrapi ``DirectMessage`` to a :class:`NormalizedMessage`.
+
+    ``users_by_id`` maps a sender ``user_id`` to a username (built from the
+    thread's user list). An unknown sender falls back to the user id so the
+    pipeline never crashes on a missing name.
+    """
+    users_by_id = users_by_id or {}
+    user_id = str(getattr(dm, "user_id", "") or "")
+    username = users_by_id.get(user_id, user_id)
+    return NormalizedMessage(
+        id=str(getattr(dm, "id", "")),
+        user_id=user_id,
+        username=username,
+        item_type=getattr(dm, "item_type", None),
+        timestamp=_to_epoch(getattr(dm, "timestamp", 0)),
+        client_context=getattr(dm, "client_context", None),
+        clip=getattr(dm, "clip", None),
+        media_share=getattr(dm, "media_share", None),
+        xma_share=getattr(dm, "xma_share", None),
+        generic_xma=getattr(dm, "generic_xma", None),
+    )
+
+
 def _default_client_factory(config: Config) -> _InstagrapiClient:  # pragma: no cover - import seam
     """Build a real ``instagrapi.Client``. Never imported by tests (they inject)."""
     from instagrapi import Client

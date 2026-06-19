@@ -10,6 +10,7 @@ delegation, and polling that feeds Listener.handle_message end-to-end.
 
 from __future__ import annotations
 
+from datetime import UTC
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -257,7 +258,7 @@ def test_resolve_media_pk_delegates_to_client(tmp_path):
 
 
 def test_normalize_converts_timestamp_to_epoch_and_resolves_username():
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from inshust.adapter import normalize_direct_message
 
@@ -266,7 +267,7 @@ def test_normalize_converts_timestamp_to_epoch_and_resolves_username():
         id="m1",
         user_id="uid-alice",
         item_type="clip",
-        timestamp=datetime(2026, 6, 10, 14, 32, tzinfo=timezone.utc),
+        timestamp=datetime(2026, 6, 10, 14, 32, tzinfo=UTC),
         client_context="ctx",
         clip=media,
         media_share=None,
@@ -281,16 +282,14 @@ def test_normalize_converts_timestamp_to_epoch_and_resolves_username():
     assert norm.username == "alice"  # resolved from the thread's user map
     assert norm.item_type == "clip"
     # datetime -> epoch seconds (int) as the pipeline expects.
-    assert norm.timestamp == int(
-        datetime(2026, 6, 10, 14, 32, tzinfo=timezone.utc).timestamp()
-    )
+    assert norm.timestamp == int(datetime(2026, 6, 10, 14, 32, tzinfo=UTC).timestamp())
     assert norm.client_context == "ctx"
     # share fields pass through so extract_share sees the real media object.
     assert norm.clip is media
 
 
 def test_normalize_unknown_user_falls_back_to_user_id():
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from inshust.adapter import normalize_direct_message
 
@@ -298,7 +297,7 @@ def test_normalize_unknown_user_falls_back_to_user_id():
         id="m2",
         user_id="uid-x",
         item_type="text",
-        timestamp=datetime(2026, 6, 10, tzinfo=timezone.utc),
+        timestamp=datetime(2026, 6, 10, tzinfo=UTC),
         client_context=None,
         clip=None,
         media_share=None,
