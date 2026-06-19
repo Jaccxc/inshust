@@ -85,10 +85,10 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
         ),
         poll_amount=int(env.get("POLL_AMOUNT") or DEFAULT_POLL_AMOUNT),
         action_delay_min_seconds=float(
-            env.get("ACTION_DELAY_MIN_SECONDS") or DEFAULT_ACTION_DELAY_MIN_SECONDS
+            env.get("ACTION_DELAY_MIN") or DEFAULT_ACTION_DELAY_MIN_SECONDS
         ),
         action_delay_max_seconds=float(
-            env.get("ACTION_DELAY_MAX_SECONDS") or DEFAULT_ACTION_DELAY_MAX_SECONDS
+            env.get("ACTION_DELAY_MAX") or DEFAULT_ACTION_DELAY_MAX_SECONDS
         ),
         challenge_backoff_seconds=float(
             env.get("CHALLENGE_BACKOFF_SECONDS") or DEFAULT_CHALLENGE_BACKOFF_SECONDS
