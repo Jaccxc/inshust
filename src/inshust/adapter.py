@@ -124,6 +124,7 @@ class InstagramAdapter:
         """
         from instagrapi.exceptions import ChallengeError
 
+        self._apply_client_settings()
         try:
             if Path(self._config.session_path).exists():
                 self._client.load_settings(self._config.session_path)
@@ -133,6 +134,17 @@ class InstagramAdapter:
             self._client.dump_settings(self._config.session_path)
         except ChallengeError as exc:
             self._pause_on_challenge(exc)
+
+    def _apply_client_settings(self) -> None:
+        """Apply optional proxy + locale from config for detection consistency.
+
+        The proxy is only set when configured (avoid disturbing a default
+        direct connection). The locale always has a sensible default, so it is
+        applied so the device/headers stay consistent across runs.
+        """
+        if self._config.proxy:
+            self._client.set_proxy(self._config.proxy)
+        self._client.set_locale(self._config.locale)
 
     def _fresh_login(self) -> None:
         """Authenticate with credentials (no persisted session available).
