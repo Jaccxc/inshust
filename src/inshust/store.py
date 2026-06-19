@@ -5,12 +5,14 @@ fields validated in the app layer, timestamps as epoch ``INTEGER``, and indices
 on the lookup columns. The schema is created on open; reopening the same file
 preserves data, so the bot is restart-safe.
 
-This module owns three tables:
+This module owns these tables:
 
 - ``seen_media`` — one row per media pk (first-seen share).
 - ``processed_messages`` — the idempotency gate of handled message ids.
 - ``url_cache`` — the xma URL->pk resolution cache (card #4) so a repeated
   share url resolves without a second client call.
+- ``warning_events`` — one row per recorded repeated-share demerit (the 記警告
+  system); totals are summed per user and converted to 小過/大過 on display.
 
 Later cards extend this by adding tables/methods; they do not rewrite these.
 """
@@ -46,10 +48,21 @@ CREATE TABLE IF NOT EXISTS url_cache (
     resolved_at INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS warning_events (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    username    TEXT    NOT NULL,
+    media_pk    TEXT,
+    gap_seconds INTEGER NOT NULL,
+    warnings    INTEGER NOT NULL,
+    occurred_at INTEGER NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_seen_media_pk
     ON seen_media (media_pk);
 CREATE INDEX IF NOT EXISTS idx_processed_message_id
     ON processed_messages (message_id);
+CREATE INDEX IF NOT EXISTS idx_warning_events_username
+    ON warning_events (username);
 """
 
 
@@ -142,6 +155,39 @@ class Store:
             (url, media_pk, resolved_at),
         )
         self._conn.commit()
+
+    # --- demerit / warning system ---------------------------------------
+    def add_warning(
+        self,
+        username: str,
+        warnings: int,
+        *,
+        media_pk: str | None = None,
+        gap_seconds: int = 0,
+        occurred_at: int = 0,
+    ) -> None:
+        """Record one repeated-share demerit for ``username`` (in 警告 units)."""
+        self._conn.execute(
+            """INSERT INTO warning_events (username, media_pk, gap_seconds, warnings, occurred_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            (username, media_pk, int(gap_seconds), int(warnings), int(occurred_at)),
+        )
+        self._conn.commit()
+
+    def total_warnings(self, username: str) -> int:
+        """Sum of warning units recorded against ``username``."""
+        row = self._conn.execute(
+            "SELECT COALESCE(SUM(warnings), 0) AS total FROM warning_events WHERE username = ?",
+            (username,),
+        ).fetchone()
+        return int(row["total"])
+
+    def clear_warnings(self) -> int:
+        """Delete every recorded warning (the ~clear command). Returns row count."""
+        count = self._conn.execute("SELECT COUNT(*) AS c FROM warning_events").fetchone()["c"]
+        self._conn.execute("DELETE FROM warning_events")
+        self._conn.commit()
+        return int(count)
 
     # --- lifecycle -------------------------------------------------------
     def close(self) -> None:

@@ -124,8 +124,7 @@ class Backfill:
         media_key = self._resolver.resolve(ref)
         if media_key is None:
             logger.info(
-                "backfill skip: could not resolve to media pk — id=%s from=@%s "
-                "item_type=%s url=%s",
+                "backfill skip: could not resolve to media pk — id=%s from=@%s item_type=%s url=%s",
                 getattr(message, "id", "?"),
                 getattr(message, "username", "") or "?",
                 getattr(message, "item_type", None) or "?",

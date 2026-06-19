@@ -179,6 +179,7 @@ class NormalizedMessage:
         "item_type",
         "timestamp",
         "client_context",
+        "text",
         "clip",
         "media_share",
         "xma_share",
@@ -194,6 +195,7 @@ class NormalizedMessage:
         item_type: str | None,
         timestamp: int,
         client_context: str | None,
+        text: str | None,
         clip: object,
         media_share: object,
         xma_share: object,
@@ -205,6 +207,7 @@ class NormalizedMessage:
         self.item_type = item_type
         self.timestamp = timestamp
         self.client_context = client_context
+        self.text = text
         self.clip = clip
         self.media_share = media_share
         self.xma_share = xma_share
@@ -230,6 +233,7 @@ def normalize_direct_message(
         item_type=getattr(dm, "item_type", None),
         timestamp=_to_epoch(getattr(dm, "timestamp", 0)),
         client_context=getattr(dm, "client_context", None),
+        text=getattr(dm, "text", None),
         clip=getattr(dm, "clip", None),
         media_share=getattr(dm, "media_share", None),
         xma_share=getattr(dm, "xma_share", None),

@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from inshust.client import FakeClient
 from inshust.config import Config
 from inshust.listener import Listener
+from inshust.models import MEDIA_TYPE_CLIP, MediaKey, ShareEvent
 from inshust.store import Store
 
 
@@ -87,9 +88,6 @@ def _make(tmp_path, *, url_to_pk=None):
     store = Store(cfg.db_path)
     client = FakeClient(url_to_pk=url_to_pk or {})
     return Listener(cfg, store, client), store, client
-
-
-from inshust.models import MEDIA_TYPE_CLIP, MediaKey, ShareEvent
 
 
 def test_reseeing_first_share_recorded_by_backfill_is_silent(tmp_path):

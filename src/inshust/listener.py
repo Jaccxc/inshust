@@ -37,6 +37,7 @@ from inshust.adapter import SendFailedError
 from inshust.client import ClientPort
 from inshust.config import Config
 from inshust.dedupe import dedupe
+from inshust.demerits import breakdown, classify
 from inshust.media_identity import extract_share
 from inshust.models import DUPLICATE, MediaKey, SeenRecord, ShareEvent
 from inshust.reply import format_reply
@@ -61,6 +62,10 @@ class Listener:
 
         # 1. idempotency / restart safety
         if self._store.is_processed(message_id):
+            return
+
+        # 1b. command system (text): ~clear (admin only) / ~me (anyone)
+        if self._maybe_command(message, message_id):
             return
 
         # 2. identify the share
@@ -114,25 +119,77 @@ class Listener:
         # 6. always mark processed last
         self._store.mark_processed(message_id)
 
+    def _maybe_command(self, message: object, message_id: str) -> bool:
+        """Handle a ``~clear`` / ``~me`` text command. Returns True if handled.
+
+        ``~clear`` wipes every warning record, but only when sent by the
+        configured admin username (a non-admin ``~clear`` is silently ignored).
+        Anyone may ``~me`` to query their own standing. A handled command is
+        marked processed and never flows into the dedupe path.
+        """
+        text = getattr(message, "text", None)
+        if not text:
+            return False
+        cmd = text.strip().lower()
+        if cmd not in ("~clear", "~me"):
+            return False
+        username = str(getattr(message, "username", ""))
+        if cmd == "~clear":
+            if username == self._config.admin_username:
+                removed = self._store.clear_warnings()
+                self._command_reply(message, f"已清除所有人的警告紀錄（共 {removed} 筆）")
+                logger.info(
+                    "warnings cleared",
+                    extra={
+                        "event": "command",
+                        "command": "clear",
+                        "by": username,
+                        "removed": removed,
+                    },
+                )
+            # a non-admin ~clear is ignored: no clear, no reply.
+        else:  # ~me
+            total = self._store.total_warnings(username)
+            self._command_reply(message, f"@{username} 目前累計：{breakdown(total)}")
+        self._store.mark_processed(message_id)
+        return True
+
+    def _command_reply(self, message: object, text: str) -> None:
+        """Reply to a command message (quoting it), surviving a send failure."""
+        try:
+            self._client.send_reply(
+                thread_id=self._config.thread_id,
+                text=text,
+                original_message_id=str(getattr(message, "id", "")),
+                original_client_context=getattr(message, "client_context", None),
+            )
+        except SendFailedError:
+            logger.error(
+                "command reply failed", extra={"event": "command_reply", "outcome": "failed"}
+            )
+
     def _reply_to_duplicate(self, event: ShareEvent, original: SeenRecord) -> None:
-        """Send the duplicate call-out and log its outcome (never crash).
+        """Send the duplicate call-out (with its demerit) and record the warning.
 
         Quote-replies attach to the canonical first-share message (``original``),
-        not the duplicate that triggered this call-out.
+        not the duplicate. A staleness-based penalty (see :mod:`inshust.demerits`)
+        is appended to the reply — e.g. ``…慢了 506 天，記大過五支`` — and recorded
+        against the re-sharer in 警告 units.
 
         The adapter retries transient group-send 500s internally; a PERSISTENT
-        failure surfaces as :class:`SendFailedError`, which is caught here and
-        logged as a ``"failed"`` reply outcome so the surrounding run loop
-        survives and keeps processing later messages. The send's own return
-        (``"sent"``/``"fallback"``) becomes the structured outcome; a double
-        that returns ``None`` is treated as ``"sent"``.
+        failure surfaces as :class:`SendFailedError`, caught here and logged as a
+        ``"failed"`` outcome so the run loop survives. The demerit is recorded
+        regardless of the send outcome (the repetition happened).
         """
+        gap = event.timestamp - original.first_sent_at
+        penalty = classify(gap)
         text = format_reply(
             original,
             duplicate_username=event.sender_username,
             duplicate_sent_at=event.timestamp,
             tz=self._config.timezone,
         )
+        text = f"{text}，記{penalty.label}"
         try:
             outcome = self._client.send_reply(
                 thread_id=event.thread_id,
@@ -150,15 +207,23 @@ class Listener:
                     "outcome": "failed",
                 },
             )
-            return
-        logger.info(
-            "reply sent",
-            extra={
-                "event": "reply_outcome",
-                "message_id": event.message_id,
-                "media_pk": event.media_key.pk,
-                "outcome": outcome or "sent",
-            },
+        else:
+            logger.info(
+                "reply sent",
+                extra={
+                    "event": "reply_outcome",
+                    "message_id": event.message_id,
+                    "media_pk": event.media_key.pk,
+                    "outcome": outcome or "sent",
+                },
+            )
+        # record the demerit against the re-sharer (in 警告 units), always.
+        self._store.add_warning(
+            event.sender_username,
+            penalty.warnings,
+            media_pk=event.media_key.pk,
+            gap_seconds=max(0, gap),
+            occurred_at=event.timestamp,
         )
 
     def _build_event(self, message: object, media_key: MediaKey, message_id: str) -> ShareEvent:

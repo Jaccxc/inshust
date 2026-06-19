@@ -34,6 +34,7 @@ DEFAULT_RECONNECT_MAX_BACKOFF_SECONDS = 300.0
 DEFAULT_BACKFILL_DELAY_MIN_SECONDS = 2.0
 DEFAULT_BACKFILL_DELAY_MAX_SECONDS = 6.0
 DEFAULT_LOG_LEVEL = "INFO"
+DEFAULT_ADMIN_USERNAME = "__jacc__"
 
 
 @dataclass(frozen=True)
@@ -85,6 +86,10 @@ class Config:
     # Console log verbosity (DEBUG/INFO/WARNING/...). At DEBUG, instagrapi's
     # per-request URL logs pass through; otherwise they are quieted to WARNING.
     log_level: str = DEFAULT_LOG_LEVEL
+
+    # --- commands --------------------------------------------------------
+    # The IG username whose ``~clear`` command may wipe all warning records.
+    admin_username: str = DEFAULT_ADMIN_USERNAME
 
 
 def load_config(env: Mapping[str, str] | None = None) -> Config:
@@ -141,6 +146,7 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
         ),
         backfill_max_messages=_int_or_none(env.get("BACKFILL_MAX_MESSAGES")),
         log_level=env.get("LOG_LEVEL") or DEFAULT_LOG_LEVEL,
+        admin_username=env.get("IG_ADMIN_USERNAME") or DEFAULT_ADMIN_USERNAME,
     )
 
 

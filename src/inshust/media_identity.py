@@ -80,7 +80,9 @@ def _xma_url(message: object) -> str | None:
     raw_xma = getattr(message, "raw_xma", None)
     if raw_xma is not None:
         for key in ("xma_clip", "xma_media_share"):
-            items = getattr(raw_xma, key, None) if not isinstance(raw_xma, dict) else raw_xma.get(key)
+            items = (
+                getattr(raw_xma, key, None) if not isinstance(raw_xma, dict) else raw_xma.get(key)
+            )
             if not items:
                 continue
             for item in items:
