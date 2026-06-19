@@ -137,7 +137,7 @@ class _InstagrapiClient(Protocol):
 
     def direct_messages(self, thread_id: int, amount: int = ...) -> list: ...
 
-    def direct_thread(self, thread_id: int, amount: int = ..., cursor: str | None = ...): ...
+    def direct_thread(self, thread_id: int, amount: int = ...): ...
 
     def direct_threads(self, amount: int = ...) -> list: ...
 
@@ -724,47 +724,37 @@ class InstagramAdapter:
     def fetch_history(self, *, max_messages: int | None = None) -> list[NormalizedMessage]:
         """Walk the configured thread's FULL history, oldest-first.
 
-        Paginates by repeatedly fetching a page of the thread and following its
-        ``oldest_cursor`` to the next (older) page, until the cursor runs out or
-        the optional ``max_messages`` cap is reached. Each page request is spaced
-        by a randomized human-like delay from the BACKFILL range (distinct from
-        the live action-delay range), so this one-time large read mimics a real
-        client. Refuses while paused (a challenge needs a human first).
+        instagrapi's ``direct_thread`` paginates internally (following the
+        thread's ``oldest_cursor``) until it has ``amount`` messages or history
+        is exhausted, pacing each internal request with the client's
+        delay_range; there is no public per-page cursor arg. So we request the
+        whole history in one call — the ``max_messages`` cap when set, else a
+        large amount that walks to the end — preceded by one BACKFILL-range
+        human-like delay. Refuses while paused (a challenge needs a human first).
 
-        instagrapi yields messages newest-first within each page and pages walk
-        from newest to oldest, so the accumulated list is reversed at the end:
-        feeding oldest-first means the genuine FIRST share is recorded before
-        its later duplicates. Returns :class:`NormalizedMessage` objects
-        (timestamps as epoch ints, usernames resolved per page) ready for the
-        backfill to feed through ``extract_share`` + the resolver into the store.
+        instagrapi returns messages newest-first, so the list is reversed:
+        feeding oldest-first means the genuine FIRST share of a reel is recorded
+        before its later duplicates. Returns :class:`NormalizedMessage` objects
+        (timestamps as epoch ints, usernames resolved from the thread's user
+        list) ready to feed through ``extract_share`` + the resolver into the store.
         """
         self._ensure_active()
         thread_id = int(self._config.thread_id)
-        page_size = self._config.poll_amount
-        cursor: str | None = None
-        collected: list[NormalizedMessage] = []
-
-        while True:
-            self._backfill_delay()
-            thread = self._client.direct_thread(thread_id, amount=page_size, cursor=cursor)
-            users_by_id = _thread_users_by_id(thread)
-            page = [
-                normalize_direct_message(dm, users_by_id)
-                for dm in (getattr(thread, "messages", None) or [])
-            ]
-            collected.extend(page)
-
-            if max_messages is not None and len(collected) >= max_messages:
-                collected = collected[:max_messages]
-                break
-
-            cursor = getattr(thread, "oldest_cursor", None)
-            if not cursor or not page:
-                break
-
-        # Newest-first across pages -> reverse to oldest-first chronology.
-        collected.reverse()
-        return collected
+        # instagrapi's direct_thread paginates internally via the thread's
+        # oldest_cursor until it has `amount` messages (or history is exhausted),
+        # pacing each internal request with the client's delay_range. There is NO
+        # public per-page cursor argument, so we request the whole history in one
+        # call: the cap when set, else a very large amount that walks to the end.
+        amount = max_messages if max_messages is not None else 100_000
+        self._backfill_delay()
+        thread = self._client.direct_thread(thread_id, amount=amount)
+        users_by_id = _thread_users_by_id(thread)
+        messages = list(getattr(thread, "messages", None) or [])
+        if max_messages is not None:
+            messages = messages[:max_messages]
+        # instagrapi returns newest-first; reverse to oldest-first chronology so
+        # the genuine FIRST share of a reel is recorded before later re-shares.
+        return [normalize_direct_message(dm, users_by_id) for dm in reversed(messages)]
 
     # --- realtime (MQTT) -------------------------------------------------
     def connect_realtime(self, listener: Listener) -> None:
