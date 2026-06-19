@@ -132,5 +132,19 @@ class InstagramAdapter:
         self._client.dump_settings(self._config.session_path)
 
     def _fresh_login(self) -> None:
-        """Authenticate with credentials (no persisted session available)."""
-        self._client.login(self._config.username, self._config.password)
+        """Authenticate with credentials (no persisted session available).
+
+        Handles 2FA: when Instagram demands a verification code, generate a
+        TOTP from the configured seed and retry the login with that code.
+        """
+        from instagrapi.exceptions import TwoFactorRequired
+
+        try:
+            self._client.login(self._config.username, self._config.password)
+        except TwoFactorRequired:
+            code = self._client.totp_generate_code(self._config.totp_seed)
+            self._client.login(
+                self._config.username,
+                self._config.password,
+                verification_code=code,
+            )
