@@ -83,6 +83,10 @@ class _InstagrapiClient(Protocol):
 
     def media_pk_from_url(self, url: str) -> str: ...
 
+    def realtime_connect(self, transport: object = ...) -> object: ...
+
+    def realtime_on(self, event: str, handler: Callable[[object], None]) -> None: ...
+
 
 def _to_epoch(timestamp: object) -> int:
     """Coerce an instagrapi ``timestamp`` to epoch seconds (UTC int).
@@ -171,6 +175,81 @@ def normalize_direct_message(
         xma_share=getattr(dm, "xma_share", None),
         generic_xma=getattr(dm, "generic_xma", None),
     )
+
+
+class _DictAttr:
+    """Wrap a plain dict so it can be read via ``getattr`` (recursively).
+
+    Realtime delivers a direct message as a JSON dict, not an instagrapi
+    ``DirectMessage`` object — but the pipeline (``normalize_direct_message`` +
+    ``extract_share``) reads message and media fields via ``getattr``. This thin
+    adapter lets the SAME normalization/identity path consume a realtime payload
+    with no special-casing: nested dicts become ``_DictAttr`` and lists of dicts
+    become lists of ``_DictAttr`` (so ``generic_xma`` works), while a missing
+    key returns the supplied default just like a real object.
+    """
+
+    __slots__ = ("_data",)
+
+    def __init__(self, data: dict) -> None:
+        self._data = data
+
+    def __getattr__(self, name: str) -> object:
+        try:
+            value = self._data[name]
+        except KeyError:
+            raise AttributeError(name) from None
+        return _wrap(value)
+
+
+def _wrap(value: object) -> object:
+    """Recursively wrap dicts/lists so attribute reads work on realtime data."""
+    if isinstance(value, dict):
+        return _DictAttr(value)
+    if isinstance(value, list):
+        return [_wrap(item) for item in value]
+    return value
+
+
+def realtime_message_to_dm(message: object) -> object:
+    """Adapt a realtime "message" event payload to a DM-shaped object.
+
+    instagrapi emits the ``"message"`` event as ``{"message": {<DM fields>}}``,
+    where the inner dict carries the direct-message item fields (``item_id``,
+    ``user_id``, ``item_type``, ``timestamp``, media, ...). This returns an
+    object exposing the attributes ``normalize_direct_message`` reads, mapping
+    the realtime ``item_id`` to the canonical ``id`` and wrapping nested
+    dicts/lists so ``extract_share`` sees attribute-bearing media. Tolerates an
+    already-flat payload (no ``message`` wrapper) and a ``DirectMessage``-like
+    object passed straight through (returned unchanged).
+    """
+    if isinstance(message, dict):
+        inner = message.get("message", message)
+    else:
+        inner = getattr(message, "message", None)
+        if inner is None:
+            return message  # already a DM-shaped object
+    if not isinstance(inner, dict):
+        return inner
+    data = dict(inner)
+    # Realtime carries the message id as ``item_id``; map it to canonical ``id``.
+    if "id" not in data and "item_id" in data:
+        data["id"] = data["item_id"]
+    return _DictAttr(data)
+
+
+def realtime_thread_id(message: object) -> str | None:
+    """Best-effort extract the thread id from a realtime "message" payload."""
+    inner: object
+    if isinstance(message, dict):
+        inner = message.get("message", message)
+    else:
+        inner = getattr(message, "message", message)
+    if isinstance(inner, dict):
+        thread_id = inner.get("thread_id")
+    else:
+        thread_id = getattr(inner, "thread_id", None)
+    return str(thread_id) if thread_id is not None else None
 
 
 def _default_client_factory(config: Config) -> _InstagrapiClient:  # pragma: no cover - import seam
@@ -425,3 +504,47 @@ class InstagramAdapter:
         """
         for message in self.fetch_recent_messages():
             listener.handle_message(message)
+
+    # --- realtime (MQTT) -------------------------------------------------
+    def connect_realtime(self, listener: Listener) -> None:
+        """Connect the MQTT realtime channel and wire it into the pipeline.
+
+        Realtime is the PRIMARY low-latency source: it registers a ``"message"``
+        handler (via ``realtime_on``) that, on a new direct message for the
+        CONFIGURED thread, reuses ``normalize_direct_message`` and feeds
+        ``Listener.handle_message`` — the SAME idempotent processed-message-id
+        gate polling uses, so a message seen by both sources yields exactly one
+        reply. Then it ``realtime_connect``s the transport (instagrapi delivers
+        events on its own background thread thereafter).
+
+        Refuses while paused (a challenge needs a human first). Handler errors
+        are caught and logged so a single malformed realtime payload never tears
+        down the connection — polling remains the dependable safety net.
+        """
+        self._ensure_active()
+        self._client.realtime_on("message", self._make_realtime_handler(listener))
+        self._client.realtime_connect()
+
+    def _make_realtime_handler(self, listener: Listener) -> Callable[[object], None]:
+        """Build the ``"message"`` handler bound to this listener."""
+
+        def _on_message(payload: object) -> None:
+            self._handle_realtime_message(listener, payload)
+
+        return _on_message
+
+    def _handle_realtime_message(self, listener: Listener, payload: object) -> None:
+        """Filter to the configured thread, normalize, feed the listener.
+
+        A realtime payload for a different thread is ignored. Any error parsing
+        or processing a single payload is swallowed (logged) so realtime stays
+        up and polling keeps catching what realtime drops.
+        """
+        try:
+            thread_id = realtime_thread_id(payload)
+            if thread_id is not None and thread_id != str(self._config.thread_id):
+                return
+            dm = realtime_message_to_dm(payload)
+            listener.handle_message(normalize_direct_message(dm))
+        except Exception:
+            logger.warning("failed to process realtime message; skipping", exc_info=True)
