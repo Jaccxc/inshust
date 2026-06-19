@@ -6,8 +6,9 @@ loading a ``.env`` file via python-dotenv.
 
 The dedupe pipeline uses ``thread_id``, ``db_path`` and ``timezone``. The
 auth/session/proxy/locale/pacing/poll fields drive the instagrapi adapter
-(card #3). The realtime/backfill seams (cards #4-#6) extend this without
-rewrites.
+(card #3); the resilience fields drive the run loop (card #6). The one-shot
+history backfill (card #7) adds its own human-like delay range + optional
+message cap.
 """
 
 from __future__ import annotations
@@ -30,6 +31,8 @@ DEFAULT_POLL_AMOUNT = 20
 DEFAULT_SEND_MAX_RETRIES = 3
 DEFAULT_SEND_BACKOFF_BASE_SECONDS = 2.0
 DEFAULT_RECONNECT_MAX_BACKOFF_SECONDS = 300.0
+DEFAULT_BACKFILL_DELAY_MIN_SECONDS = 2.0
+DEFAULT_BACKFILL_DELAY_MAX_SECONDS = 6.0
 
 
 @dataclass(frozen=True)
@@ -63,6 +66,15 @@ class Config:
     send_max_retries: int = DEFAULT_SEND_MAX_RETRIES
     send_backoff_base_seconds: float = DEFAULT_SEND_BACKOFF_BASE_SECONDS
     reconnect_max_backoff_seconds: float = DEFAULT_RECONNECT_MAX_BACKOFF_SECONDS
+
+    # --- one-shot history backfill (card #7) -----------------------------
+    # The manual backfill script's OWN human-like delay range between history
+    # page requests, and an OPTIONAL cap on how many past messages to walk
+    # (``None`` = full history). These drive only the backfill, never the live
+    # bot's action delay.
+    backfill_delay_min_seconds: float = DEFAULT_BACKFILL_DELAY_MIN_SECONDS
+    backfill_delay_max_seconds: float = DEFAULT_BACKFILL_DELAY_MAX_SECONDS
+    backfill_max_messages: int | None = None
 
 
 def load_config(env: Mapping[str, str] | None = None) -> Config:
@@ -110,4 +122,16 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
         reconnect_max_backoff_seconds=float(
             env.get("RECONNECT_MAX_BACKOFF_SECONDS") or DEFAULT_RECONNECT_MAX_BACKOFF_SECONDS
         ),
+        backfill_delay_min_seconds=float(
+            env.get("BACKFILL_DELAY_MIN") or DEFAULT_BACKFILL_DELAY_MIN_SECONDS
+        ),
+        backfill_delay_max_seconds=float(
+            env.get("BACKFILL_DELAY_MAX") or DEFAULT_BACKFILL_DELAY_MAX_SECONDS
+        ),
+        backfill_max_messages=_int_or_none(env.get("BACKFILL_MAX_MESSAGES")),
     )
+
+
+def _int_or_none(value: str | None) -> int | None:
+    """Parse an optional int env value; blank/absent means ``None`` (full)."""
+    return int(value) if value else None

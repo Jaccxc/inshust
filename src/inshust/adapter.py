@@ -134,7 +134,7 @@ class _InstagrapiClient(Protocol):
 
     def direct_messages(self, thread_id: int, amount: int = ...) -> list: ...
 
-    def direct_thread(self, thread_id: int, amount: int = ...): ...
+    def direct_thread(self, thread_id: int, amount: int = ..., cursor: str | None = ...): ...
 
     def media_pk_from_url(self, url: str) -> str: ...
 
@@ -230,6 +230,14 @@ def normalize_direct_message(
         xma_share=getattr(dm, "xma_share", None),
         generic_xma=getattr(dm, "generic_xma", None),
     )
+
+
+def _thread_users_by_id(thread: object) -> dict[str, str]:
+    """Build a ``user_id -> username`` map from a thread's user list."""
+    return {
+        str(getattr(u, "pk", "")): str(getattr(u, "username", ""))
+        for u in (getattr(thread, "users", None) or [])
+    }
 
 
 class _DictAttr:
@@ -444,6 +452,17 @@ class InstagramAdapter:
         high = self._config.action_delay_max_seconds
         self._sleep(self._rng.uniform(low, high))
 
+    def _backfill_delay(self) -> None:
+        """Pause a randomized human-like interval for a backfill page request.
+
+        Uses the backfill-specific delay range (``backfill_delay_min/max``),
+        distinct from the live bot's action-delay range, so the one-time large
+        history walk can be paced more conservatively to lower detection risk.
+        """
+        low = self._config.backfill_delay_min_seconds
+        high = self._config.backfill_delay_max_seconds
+        self._sleep(self._rng.uniform(low, high))
+
     def _ensure_active(self) -> None:
         """Refuse to act while paused (a challenge needs a human first)."""
         if self._paused:
@@ -596,11 +615,7 @@ class InstagramAdapter:
         self._delay()
         amount = amount if amount is not None else self._config.poll_amount
         thread = self._client.direct_thread(int(self._config.thread_id), amount=amount)
-
-        users_by_id = {
-            str(getattr(u, "pk", "")): str(getattr(u, "username", ""))
-            for u in (getattr(thread, "users", None) or [])
-        }
+        users_by_id = _thread_users_by_id(thread)
         messages = list(getattr(thread, "messages", None) or [])
         # Oldest-first so first-seen ordering matches real chronology.
         return [normalize_direct_message(dm, users_by_id) for dm in reversed(messages)]
@@ -615,6 +630,52 @@ class InstagramAdapter:
         """
         for message in self.fetch_recent_messages():
             listener.handle_message(message)
+
+    # --- one-shot history backfill (card #7) -----------------------------
+    def fetch_history(self, *, max_messages: int | None = None) -> list[NormalizedMessage]:
+        """Walk the configured thread's FULL history, oldest-first.
+
+        Paginates by repeatedly fetching a page of the thread and following its
+        ``oldest_cursor`` to the next (older) page, until the cursor runs out or
+        the optional ``max_messages`` cap is reached. Each page request is spaced
+        by a randomized human-like delay from the BACKFILL range (distinct from
+        the live action-delay range), so this one-time large read mimics a real
+        client. Refuses while paused (a challenge needs a human first).
+
+        instagrapi yields messages newest-first within each page and pages walk
+        from newest to oldest, so the accumulated list is reversed at the end:
+        feeding oldest-first means the genuine FIRST share is recorded before
+        its later duplicates. Returns :class:`NormalizedMessage` objects
+        (timestamps as epoch ints, usernames resolved per page) ready for the
+        backfill to feed through ``extract_share`` + the resolver into the store.
+        """
+        self._ensure_active()
+        thread_id = int(self._config.thread_id)
+        page_size = self._config.poll_amount
+        cursor: str | None = None
+        collected: list[NormalizedMessage] = []
+
+        while True:
+            self._backfill_delay()
+            thread = self._client.direct_thread(thread_id, amount=page_size, cursor=cursor)
+            users_by_id = _thread_users_by_id(thread)
+            page = [
+                normalize_direct_message(dm, users_by_id)
+                for dm in (getattr(thread, "messages", None) or [])
+            ]
+            collected.extend(page)
+
+            if max_messages is not None and len(collected) >= max_messages:
+                collected = collected[:max_messages]
+                break
+
+            cursor = getattr(thread, "oldest_cursor", None)
+            if not cursor or not page:
+                break
+
+        # Newest-first across pages -> reverse to oldest-first chronology.
+        collected.reverse()
+        return collected
 
     # --- realtime (MQTT) -------------------------------------------------
     def connect_realtime(self, listener: Listener) -> None:

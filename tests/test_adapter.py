@@ -405,3 +405,123 @@ def test_poll_once_refuses_when_paused(tmp_path):
 
     # A paused bot must not poll the thread.
     client.direct_thread.assert_not_called()
+
+
+# --- history backfill: paginate via direct_thread/cursor, human-like pacing -
+
+
+def _page(messages, users, *, oldest_cursor):
+    """A scripted history page: a DirectThread-shaped object with a cursor.
+
+    ``oldest_cursor`` is the cursor for the NEXT (older) page; a falsy value
+    means this is the final page.
+    """
+    return SimpleNamespace(
+        id="42",
+        messages=list(messages),
+        users=[SimpleNamespace(pk=pk, username=name) for pk, name in users.items()],
+        oldest_cursor=oldest_cursor,
+    )
+
+
+def test_fetch_history_paginates_via_cursor_until_exhausted(tmp_path):
+    cfg = _config(tmp_path)
+    client = MagicMock()
+    # Page 1 (newest), then page 2 (older), then a final empty page (no cursor).
+    page1 = _page(
+        [_dm("m4", user_id="uid-bob", item_type="clip", ts=1_700_300_000, clip_pk="100")],
+        users={"uid-bob": "bob"},
+        oldest_cursor="cur-1",
+    )
+    page2 = _page(
+        [_dm("m1", user_id="uid-alice", item_type="clip", ts=1_700_000_000, clip_pk="100")],
+        users={"uid-alice": "alice"},
+        oldest_cursor=None,
+    )
+    client.direct_thread.side_effect = [page1, page2]
+
+    adapter = _adapter(cfg, client)
+    messages = adapter.fetch_history()
+
+    # It walked every page until the cursor ran out.
+    assert client.direct_thread.call_count == 2
+    # The first page is fetched with NO cursor; the second uses page1's cursor.
+    first_call, second_call = client.direct_thread.call_args_list
+    assert first_call.args[0] == 42  # thread id as int
+    assert first_call.kwargs.get("cursor") in (None, "")
+    assert second_call.kwargs.get("cursor") == "cur-1"
+    # All messages returned, OLDEST-first (so the genuine first share records first).
+    assert [m.id for m in messages] == ["m1", "m4"]
+    # Usernames resolved from each page's user list.
+    by_id = {m.id: m.username for m in messages}
+    assert by_id["m1"] == "alice"
+    assert by_id["m4"] == "bob"
+
+
+def test_fetch_history_spaces_page_requests_with_human_like_delay(tmp_path):
+    # The backfill delay range is its OWN config, distinct from the action range.
+    cfg = _config(tmp_path, backfill_delay_min_seconds=5.0, backfill_delay_max_seconds=5.0)
+    client = MagicMock()
+    page1 = _page(
+        [_dm("m2", user_id="uid-bob", item_type="text", ts=1_700_300_000)],
+        users={"uid-bob": "bob"},
+        oldest_cursor="cur-1",
+    )
+    page2 = _page(
+        [_dm("m1", user_id="uid-alice", item_type="text", ts=1_700_000_000)],
+        users={"uid-alice": "alice"},
+        oldest_cursor=None,
+    )
+    client.direct_thread.side_effect = [page1, page2]
+
+    adapter = _adapter(cfg, client)
+    adapter.fetch_history()
+
+    # A randomized human-like delay (within the BACKFILL range) was requested
+    # for each page request — distinctly NOT the action-delay range (2..6).
+    assert adapter.recorded_sleeps
+    assert all(s == 5.0 for s in adapter.recorded_sleeps)
+    # One delay per page request.
+    assert len(adapter.recorded_sleeps) == 2
+
+
+def test_fetch_history_honors_optional_cap(tmp_path):
+    cfg = _config(tmp_path)
+    client = MagicMock()
+    page1 = _page(
+        [
+            _dm("m4", user_id="uid-bob", item_type="clip", ts=1_700_400_000, clip_pk="400"),
+            _dm("m3", user_id="uid-bob", item_type="clip", ts=1_700_300_000, clip_pk="300"),
+        ],
+        users={"uid-bob": "bob"},
+        oldest_cursor="cur-1",
+    )
+    # A second page exists, but the cap of 2 should stop us before fetching it.
+    page2 = _page(
+        [_dm("m1", user_id="uid-alice", item_type="clip", ts=1_700_000_000, clip_pk="100")],
+        users={"uid-alice": "alice"},
+        oldest_cursor=None,
+    )
+    client.direct_thread.side_effect = [page1, page2]
+
+    adapter = _adapter(cfg, client)
+    messages = adapter.fetch_history(max_messages=2)
+
+    # The cap was honored: only the first page was fetched, only 2 messages.
+    assert client.direct_thread.call_count == 1
+    assert len(messages) == 2
+    assert {m.id for m in messages} == {"m3", "m4"}
+
+
+def test_fetch_history_refuses_when_paused(tmp_path):
+    cfg = _config(tmp_path)
+    client = MagicMock()
+    client.login.side_effect = ChallengeRequired("checkpoint")
+    adapter = _adapter(cfg, client)
+    with pytest.raises(OperatorPausedError):
+        adapter.login()
+
+    # A paused bot must not walk history either.
+    with pytest.raises(OperatorPausedError):
+        adapter.fetch_history()
+    client.direct_thread.assert_not_called()
