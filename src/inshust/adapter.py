@@ -19,8 +19,9 @@ Responsibilities (card #3):
 - **Sending.** ``send_reply`` uses native quote-reply
   (``direct_send(reply_to_message=...)``) referencing the original message; if
   that cannot be constructed/accepted it FALLS BACK to a plain ``direct_send``
-  that still delivers the text. (Retry/backoff is card #5 — a clean seam is
-  left, not implemented here.)
+  that still delivers the text. Documented transient group-send 500s are retried
+  with exponential backoff at the ``_send_with_retry`` choke point (card #6); a
+  persistent failure raises :class:`SendFailedError` so the loop survives.
 - **Resolution.** ``resolve_media_pk_from_url`` delegates to
   ``client.media_pk_from_url``.
 - **Polling.** ``poll_once`` fetches recent messages from the configured thread
@@ -65,16 +66,20 @@ class SendFailedError(Exception):
     """
 
 
-def _is_transient_send_error(exc: Exception) -> bool:
-    """Classify a send error as a documented transient group-send failure.
+def is_transient_error(exc: Exception) -> bool:
+    """Classify an error as a documented transient/recoverable failure.
 
     The PRD calls out ``direct_v2/threads/broadcast/text/`` 500s as the flaky
-    case worth retrying. instagrapi surfaces these (plus connection drops,
+    send case worth retrying. instagrapi surfaces these (plus connection drops,
     timeouts, throttles and malformed-JSON 5xx bodies) as ``ClientError``
     subclasses, so the transient set is ``ClientError`` and anything carrying a
     5xx / timeout / throttle signature. A native quote-reply *rejection* (the
     server refusing the ``reply_to_message`` shape) is NOT transient — that
     keeps flowing to the plaintext fallback, unchanged from card #3.
+
+    The SAME classifier is reused by the run loop (card #6): a dropped realtime/
+    poll connection (``ClientConnectionError``/timeout) is transient, so the loop
+    backs off + reconnects instead of crashing.
     """
     from instagrapi.exceptions import (
         ClientConnectionError,
@@ -503,7 +508,7 @@ class InstagramAdapter:
     def _send_with_retry(self, text: str, *, thread_ids: list[int], reply_to_message=None) -> None:
         """Send once, retrying documented transient group-send 500s w/ backoff.
 
-        On a transient error (see :func:`_is_transient_send_error`) it sleeps an
+        On a transient error (see :func:`is_transient_error`) it sleeps an
         exponentially-growing backoff (``base * 2**attempt``) and retries, up to
         ``config.send_max_retries`` retries after the initial attempt. A
         NON-transient error propagates immediately (so ``send_reply`` can fall
@@ -522,7 +527,7 @@ class InstagramAdapter:
                     self._client.direct_send(text, thread_ids=thread_ids)
                 return
             except Exception as exc:
-                if not _is_transient_send_error(exc):
+                if not is_transient_error(exc):
                     raise
                 if attempt >= self._config.send_max_retries:
                     logger.warning(

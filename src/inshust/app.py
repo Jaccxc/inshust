@@ -15,11 +15,13 @@ processed-message-id gate guarantees a message seen by both yields exactly one
 reply. The sleeper and loop-continuation are injectable so tests drive a finite
 number of cycles with NO real network and NO real sleeping.
 
-Where card #6 extends: the run-loop reconnect/backoff seam lives in
-``run_poll_loop`` (the ``try/except OperatorPausedError`` cycle is the place to
-add realtime-drop detection + ``connect_realtime`` retry/backoff). The send
-retry/backoff seam lives in the adapter's single ``direct_send`` choke point
-inside ``InstagramAdapter.send_reply``.
+Card #6 resilience lives here: ``run_poll_loop`` survives a dropped connection
+(a transient ``ClientError`` from ``poll_once``) by backing off with capped
+exponential backoff and reconnecting realtime instead of crashing; a clean poll
+resets the backoff. The send retry/backoff + persistent-failure handling lives
+in the adapter (``send_reply``/``_send_with_retry``) and the listener
+(structured ``share_observed``/``dedupe_decision``/``reply_outcome`` logs;
+catching ``SendFailedError`` so the loop keeps going).
 """
 
 from __future__ import annotations
@@ -28,7 +30,7 @@ import logging
 import time
 from collections.abc import Callable
 
-from inshust.adapter import InstagramAdapter, OperatorPausedError
+from inshust.adapter import InstagramAdapter, OperatorPausedError, is_transient_error
 from inshust.client import ClientPort
 from inshust.config import Config, load_config
 from inshust.listener import Listener
@@ -62,18 +64,59 @@ def run_poll_loop(
 
     ``login`` is the seam for the dual-source ``run``: when realtime is connected
     first, ``run`` performs the single login itself and passes ``login=False``
-    so the loop does not re-authenticate. This ``try/except OperatorPausedError``
-    cycle is where card #6 adds realtime-drop detection + reconnect/backoff.
+    so the loop does not re-authenticate.
+
+    Card #6 resilience: a dropped connection (a transient ``ClientError`` —
+    connection drop / timeout / 5xx — from ``poll_once``) does NOT crash the
+    loop. The loop logs it, backs off with exponential backoff (base
+    ``send_backoff_base_seconds``, capped at ``reconnect_max_backoff_seconds``),
+    RECONNECTS the realtime channel, and continues. A clean poll resets the
+    backoff so a later drop starts low again. A genuine challenge/checkpoint
+    (``OperatorPausedError``) still stops the loop — that needs a human.
     """
     if login:
         adapter.login()
+    reconnect_attempt = 0
     while should_continue():
         try:
             adapter.poll_once(listener)
+            reconnect_attempt = 0  # a clean poll resets the reconnect backoff
         except OperatorPausedError:
             logger.critical("bot paused (challenge/checkpoint) — stopping poll loop")
             return
+        except Exception as exc:
+            if not is_transient_error(exc):
+                raise
+            backoff = min(
+                config.send_backoff_base_seconds * (2**reconnect_attempt),
+                config.reconnect_max_backoff_seconds,
+            )
+            logger.warning(
+                "connection dropped (attempt %d); backing off %.1fs and reconnecting: %s",
+                reconnect_attempt + 1,
+                backoff,
+                exc,
+            )
+            sleeper(backoff)
+            _reconnect_realtime(adapter, listener)
+            reconnect_attempt += 1
+            continue
         sleeper(config.poll_interval_seconds)
+
+
+def _reconnect_realtime(adapter: InstagramAdapter, listener: Listener) -> None:
+    """Re-establish the realtime channel after a drop (best-effort).
+
+    Realtime is the experimental low-latency PRIMARY; polling is the dependable
+    safety net. A reconnect failure must NOT stop the bot — polling keeps
+    catching duplicates — so a failed reconnect is logged and swallowed.
+    """
+    try:
+        adapter.connect_realtime(listener)
+    except OperatorPausedError:
+        raise
+    except Exception:
+        logger.warning("realtime reconnect failed; relying on polling safety net", exc_info=True)
 
 
 def run(
@@ -111,7 +154,8 @@ def run(
         return
     except Exception:
         # Realtime is best-effort/experimental: a connect failure must NOT stop
-        # the bot — polling is the dependable safety net. Card #6 adds reconnect.
+        # the bot — polling is the dependable safety net, and ``run_poll_loop``
+        # reconnects realtime on the next transient drop (card #6).
         logger.warning("realtime connect failed; relying on polling safety net", exc_info=True)
     run_poll_loop(
         adapter,
