@@ -20,6 +20,9 @@ The walk:
    ``Store.record_share``. Because ``record_share`` is ``INSERT OR IGNORE`` on
    the media pk, re-running is idempotent (an already-recorded pk is left
    untouched) and the FIRST sharer always wins.
+4. Every walked message id is marked in ``processed_messages`` so the live
+   bot's first poll does not treat pre-backfill history as new duplicates to
+   reply to.
 
 It sends NO replies — it deliberately does NOT go through
 ``Listener.handle_message`` (which would reply on duplicates). Non-media and
@@ -84,6 +87,12 @@ class Backfill:
                 recorded += 1
             else:
                 skipped += 1
+            message_id = str(getattr(message, "id", ""))
+            if message_id:
+                self._store.mark_processed(
+                    message_id,
+                    processed_at=int(getattr(message, "timestamp", 0)),
+                )
         logger.info(
             "backfill complete: walked=%d recorded=%d skipped=%d",
             len(messages),

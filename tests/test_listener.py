@@ -89,6 +89,29 @@ def _make(tmp_path, *, url_to_pk=None):
     return Listener(cfg, store, client), store, client
 
 
+from inshust.models import MEDIA_TYPE_CLIP, MediaKey, ShareEvent
+
+
+def test_reseeing_first_share_recorded_by_backfill_is_silent(tmp_path):
+    cfg = _config(tmp_path)
+    store = Store(cfg.db_path)
+    store.record_share(
+        ShareEvent(
+            media_key=MediaKey(pk="100", shortcode="CzAbc", media_type=MEDIA_TYPE_CLIP),
+            sender_username="alice",
+            sender_user_id="uid-alice",
+            message_id="m1",
+            timestamp=1_700_000_000,
+            thread_id=cfg.thread_id,
+            client_context="ctx",
+        )
+    )
+    client = FakeClient()
+    listener = Listener(cfg, store, client)
+    listener.handle_message(_share_msg("m1", pk="100", username="alice"))
+    assert client.sent == []
+
+
 def test_two_identical_shares_yield_exactly_one_reply(tmp_path):
     listener, _store, client = _make(tmp_path)
     listener.handle_message(_share_msg("m1", pk="100", username="alice", timestamp=1_700_000_000))

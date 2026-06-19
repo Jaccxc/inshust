@@ -144,6 +144,26 @@ def test_backfill_logs_skip_reasons_for_non_media(tmp_path, caplog):
     assert "media_pk=100" in record_logs[0].message
 
 
+def test_backfill_marks_walked_messages_processed(tmp_path):
+    cfg = _config(tmp_path)
+    client = MagicMock()
+    page = _page(
+        [
+            _dm("m2", user_id="uid-bob", item_type="text", ts=1_700_200_000),
+            _dm("m1", user_id="uid-alice", item_type="clip", ts=1_700_100_000, clip_pk="100"),
+        ],
+        users={"uid-alice": "alice", "uid-bob": "bob"},
+        oldest_cursor=None,
+    )
+    client.direct_thread.return_value = page
+
+    store = Store(cfg.db_path)
+    Backfill(cfg, store, _adapter(cfg, client)).run()
+
+    assert store.is_processed("m1")
+    assert store.is_processed("m2")
+
+
 def test_backfill_sends_no_replies(tmp_path):
     cfg = _config(tmp_path)
     client = MagicMock()
@@ -285,11 +305,28 @@ def test_backfilled_db_is_usable_by_the_live_listener(tmp_path):
     Backfill(cfg, store, _adapter(cfg, client)).run()
     store.close()
 
-    # Reopen the SAME file as the live bot would, with a fresh listener.
+    # Simulating startup poll: replaying backfilled history must not reply.
     live_store = Store(cfg.db_path)
     fake = FakeClient()
     listener = Listener(cfg, live_store, fake)
-    # Bob re-shares the same reel (pk 100) live -> duplicate -> exactly one reply.
+    for msg_id, pk in (("m1", "100"),):
+        listener.handle_message(
+            SimpleNamespace(
+                id=msg_id,
+                user_id="uid-alice",
+                username="alice",
+                item_type="clip",
+                timestamp=1_700_100_000,
+                client_context="ctx",
+                clip=SimpleNamespace(pk=pk, code="CODE"),
+                media_share=None,
+                xma_share=None,
+                generic_xma=None,
+            )
+        )
+    assert fake.sent == []
+
+    # A genuinely NEW live re-share still triggers exactly one reply.
     live_msg = SimpleNamespace(
         id="m2",
         user_id="uid-bob",

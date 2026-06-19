@@ -9,7 +9,9 @@ identity+store path without the reply. The flow:
 3. resolve the share ref to a canonical MediaKey (url-only xma shares resolve
    via the client + url->pk cache). Unresolvable? mark processed and skip.
 4. build a normalized ShareEvent from the resolved key + message metadata.
-5. dedupe — FIRST_SEEN records silently; DUPLICATE sends exactly one reply.
+5. dedupe — FIRST_SEEN records silently; DUPLICATE sends exactly one reply
+   (except when the message *is* the canonical first share — e.g. poll replay
+   after backfill — which stays silent).
 6. always mark the message processed at the end.
 
 Card #6 (observability) adds STRUCTURED logs at this orchestration seam: each
@@ -104,7 +106,10 @@ class Listener:
             },
         )
         if decision.kind == DUPLICATE and decision.original is not None:
-            self._reply_to_duplicate(event, decision.original)
+            # Re-seeing the canonical first-share message (e.g. after backfill
+            # populated seen_media, or a poll replay) is not a re-share.
+            if event.message_id != decision.original.original_message_id:
+                self._reply_to_duplicate(event, decision.original)
 
         # 6. always mark processed last
         self._store.mark_processed(message_id)
