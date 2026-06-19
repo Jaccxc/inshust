@@ -76,6 +76,21 @@ def test_fresh_login_when_no_session_then_persists(tmp_path):
     client.load_settings.assert_not_called()
 
 
+def test_corrupt_session_falls_back_to_fresh_login(tmp_path):
+    cfg = _config(tmp_path)
+    (tmp_path / "session.json").write_text("not-json")
+    client = MagicMock()
+    # Loading a corrupt session blows up -> the adapter recovers via fresh login.
+    client.load_settings.side_effect = ValueError("corrupt session")
+    client.login.return_value = True
+
+    _adapter(cfg, client).login()
+
+    client.load_settings.assert_called_once()
+    client.login.assert_called_once_with("bot", "pw")
+    client.dump_settings.assert_called_once_with(cfg.session_path)
+
+
 # --- 2FA (TOTP) ------------------------------------------------------------
 
 
