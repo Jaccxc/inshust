@@ -41,3 +41,29 @@ def test_later_card_fields_present_but_optional():
     assert cfg.username == "burner"
     assert cfg.proxy == "http://p:1"
     assert cfg.poll_interval_seconds == 30
+
+
+def test_adapter_pacing_and_locale_fields_load_from_env():
+    cfg = load_config(
+        env={
+            "IG_THREAD_ID": "t-1",
+            "IG_LOCALE": "zh_TW",
+            "ACTION_DELAY_MIN": "1.5",
+            "ACTION_DELAY_MAX": "4.5",
+            "POLL_AMOUNT": "50",
+            "CHALLENGE_BACKOFF_SECONDS": "120",
+        }
+    )
+    assert cfg.locale == "zh_TW"
+    assert cfg.action_delay_min_seconds == 1.5
+    assert cfg.action_delay_max_seconds == 4.5
+    assert cfg.poll_amount == 50
+    assert cfg.challenge_backoff_seconds == 120
+
+
+def test_adapter_pacing_defaults():
+    cfg = load_config(env={"IG_THREAD_ID": "t-1"})
+    assert cfg.locale == "en_US"
+    assert cfg.action_delay_min_seconds == 2.0
+    assert cfg.action_delay_max_seconds == 6.0
+    assert cfg.poll_amount == 20
