@@ -309,3 +309,84 @@ def test_normalize_unknown_user_falls_back_to_user_id():
 
     # Unknown sender -> username falls back to the user id (never crashes).
     assert norm.username == "uid-x"
+
+
+# --- polling: fetch recent thread messages -> feed handle_message ----------
+
+
+def _dm(message_id, *, user_id, item_type, ts, clip_pk=None, ctx="ctx"):
+    from datetime import datetime
+
+    media = SimpleNamespace(pk=clip_pk, code="CzAbc") if clip_pk is not None else None
+    return SimpleNamespace(
+        id=message_id,
+        user_id=user_id,
+        item_type=item_type,
+        timestamp=datetime.fromtimestamp(ts, tz=UTC),
+        client_context=ctx,
+        clip=media if item_type == "clip" else None,
+        media_share=None,
+        xma_share=None,
+        generic_xma=None,
+    )
+
+
+def _thread(messages, users):
+    # instagrapi returns messages newest-first; mimic that ordering.
+    return SimpleNamespace(
+        id="42",
+        messages=list(messages),
+        users=[SimpleNamespace(pk=pk, username=name) for pk, name in users.items()],
+    )
+
+
+def test_poll_once_feeds_messages_and_produces_dedupe_reply(tmp_path):
+    from inshust.listener import Listener
+    from inshust.store import Store
+
+    cfg = _config(tmp_path)
+    client = MagicMock()
+    # Two shares of the same reel (pk 100): alice first, then bob -> one reply.
+    # instagrapi yields newest-first, so bob's (later) message is first.
+    msgs = [
+        _dm("m2", user_id="uid-bob", item_type="clip", ts=1_700_100_000, clip_pk="100"),
+        _dm("m1", user_id="uid-alice", item_type="clip", ts=1_700_000_000, clip_pk="100"),
+    ]
+    client.direct_thread.return_value = _thread(
+        msgs, users={"uid-alice": "alice", "uid-bob": "bob"}
+    )
+
+    adapter = _adapter(cfg, client)
+    store = Store(cfg.db_path)
+    listener = Listener(cfg, store, adapter)
+
+    adapter.poll_once(listener)
+
+    client.direct_thread.assert_called_once()
+    # The thread id is fetched as an int.
+    assert client.direct_thread.call_args.args[0] == 42
+    # Exactly one duplicate reply, naming alice (the first sender), quoting m2.
+    assert client.direct_send.call_count == 1
+    sent_text = client.direct_send.call_args.args[0]
+    assert "@alice" in sent_text
+
+
+def test_poll_once_refuses_when_paused(tmp_path):
+    from inshust.listener import Listener
+    from inshust.store import Store
+
+    cfg = _config(tmp_path)
+    client = MagicMock()
+    client.login.side_effect = ChallengeRequired("checkpoint")
+    adapter = _adapter(cfg, client)
+    # A challenge during login pauses the bot (observable via .paused).
+    with pytest.raises(OperatorPausedError):
+        adapter.login()
+    assert adapter.paused is True
+
+    listener = Listener(cfg, Store(cfg.db_path), adapter)
+    with pytest.raises(OperatorPausedError):
+        adapter.poll_once(listener)
+
+    # A paused bot must not poll the thread.
+    client.direct_thread.assert_not_called()
