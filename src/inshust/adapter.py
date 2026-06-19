@@ -37,9 +37,12 @@ import logging
 import random
 from collections.abc import Callable
 from pathlib import Path
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from inshust.config import Config
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from inshust.listener import Listener
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +78,8 @@ class _InstagrapiClient(Protocol):
     def direct_send(self, text: str, thread_ids: list[int], reply_to_message: object = ...): ...
 
     def direct_messages(self, thread_id: int, amount: int = ...) -> list: ...
+
+    def direct_thread(self, thread_id: int, amount: int = ...): ...
 
     def media_pk_from_url(self, url: str) -> str: ...
 
@@ -366,3 +371,37 @@ class InstagramAdapter:
         self._ensure_active()
         self._delay()
         return str(self._client.media_pk_from_url(url))
+
+    # --- polling ---------------------------------------------------------
+    def fetch_recent_messages(self, amount: int | None = None) -> list[NormalizedMessage]:
+        """Fetch recent messages from the configured thread, oldest-first.
+
+        Returns :class:`NormalizedMessage` objects (timestamps as epoch ints,
+        usernames resolved from the thread's user list) ready for the pipeline.
+        instagrapi returns newest-first, so the list is reversed: feeding
+        oldest-first means the genuine FIRST share is recorded before its
+        later duplicates. Refuses while paused; spaced by a human-like delay.
+        """
+        self._ensure_active()
+        self._delay()
+        amount = amount if amount is not None else self._config.poll_amount
+        thread = self._client.direct_thread(int(self._config.thread_id), amount=amount)
+
+        users_by_id = {
+            str(getattr(u, "pk", "")): str(getattr(u, "username", ""))
+            for u in (getattr(thread, "users", None) or [])
+        }
+        messages = list(getattr(thread, "messages", None) or [])
+        # Oldest-first so first-seen ordering matches real chronology.
+        return [normalize_direct_message(dm, users_by_id) for dm in reversed(messages)]
+
+    def poll_once(self, listener: Listener) -> None:
+        """Fetch recent thread messages and feed each through the listener.
+
+        This is the polling safety net: every fetched message goes through
+        ``Listener.handle_message`` (the same idempotent gate realtime/backfill
+        use), so duplicates produce exactly one reply and re-polled messages are
+        skipped. Refuses to poll while paused.
+        """
+        for message in self.fetch_recent_messages():
+            listener.handle_message(message)
