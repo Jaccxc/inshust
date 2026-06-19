@@ -220,14 +220,34 @@ class InstagramAdapter:
 
         self._apply_client_settings()
         try:
-            if Path(self._config.session_path).exists():
-                self._client.load_settings(self._config.session_path)
+            if self._load_persisted_session():
                 return
 
             self._fresh_login()
             self._client.dump_settings(self._config.session_path)
         except ChallengeError as exc:
             self._pause_on_challenge(exc)
+
+    def _load_persisted_session(self) -> bool:
+        """Reuse a persisted session if one exists and loads cleanly.
+
+        Returns True when the session was reused (no fresh login needed). A
+        missing file, or a corrupt one that fails to load, returns False so the
+        caller falls back to a fresh credential login (and re-persists a good
+        session).
+        """
+        if not Path(self._config.session_path).exists():
+            return False
+        try:
+            self._client.load_settings(self._config.session_path)
+            return True
+        except Exception:
+            logger.warning(
+                "could not load persisted session at %s; falling back to fresh login",
+                self._config.session_path,
+                exc_info=True,
+            )
+            return False
 
     def _apply_client_settings(self) -> None:
         """Apply optional proxy + locale from config for detection consistency.
