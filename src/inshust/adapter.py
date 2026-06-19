@@ -352,12 +352,21 @@ class InstagramAdapter:
         client_factory: Callable[[Config], _InstagrapiClient] = _default_client_factory,
         sleeper: Callable[[float], None] | None = None,
         rng: random.Random | None = None,
+        challenge_code_handler: Callable[[str, object], str] | None = None,
+        two_factor_code_provider: Callable[[], str] | None = None,
     ) -> None:
         self._config = config
         self._client = client if client is not None else client_factory(config)
         self._sleeper = sleeper
         self._rng = rng or random.Random()
         self._paused = False
+        # Optional interactive handlers for a human-present run (CLI commands):
+        # instagrapi calls challenge_code_handler(username, choice) to resolve a
+        # login checkpoint; two_factor_code_provider() supplies a 2FA code when
+        # no TOTP seed is configured. The always-on bot leaves both None and
+        # pauses on a challenge instead.
+        self._challenge_code_handler = challenge_code_handler
+        self._two_factor_code_provider = two_factor_code_provider
 
     @property
     def client(self) -> _InstagrapiClient:
@@ -419,24 +428,44 @@ class InstagramAdapter:
         if self._config.proxy:
             self._client.set_proxy(self._config.proxy)
         self._client.set_locale(self._config.locale)
+        # When running interactively, let instagrapi resolve a login checkpoint
+        # by prompting for the emailed/texted code instead of raising.
+        if self._challenge_code_handler is not None:
+            self._client.challenge_code_handler = self._challenge_code_handler
 
     def _fresh_login(self) -> None:
         """Authenticate with credentials (no persisted session available).
 
-        Handles 2FA: when Instagram demands a verification code, generate a
-        TOTP from the configured seed and retry the login with that code.
+        Handles 2FA: when Instagram demands a verification code, obtain one (a
+        TOTP from the configured seed, or — in an interactive run — a code typed
+        by the operator) and retry the login with it. With neither available the
+        ``TwoFactorRequired`` propagates unchanged.
         """
         from instagrapi.exceptions import TwoFactorRequired
 
         try:
             self._client.login(self._config.username, self._config.password)
         except TwoFactorRequired:
-            code = self._client.totp_generate_code(self._config.totp_seed)
+            code = self._two_factor_code()
+            if code is None:
+                raise
             self._client.login(
                 self._config.username,
                 self._config.password,
                 verification_code=code,
             )
+
+    def _two_factor_code(self) -> str | None:
+        """Get a 2FA code: TOTP seed first, else the interactive provider.
+
+        Returns ``None`` when neither is configured, so the caller re-raises the
+        ``TwoFactorRequired`` rather than guessing.
+        """
+        if self._config.totp_seed:
+            return self._client.totp_generate_code(self._config.totp_seed)
+        if self._two_factor_code_provider is not None:
+            return self._two_factor_code_provider()
+        return None
 
     def _pause_on_challenge(self, exc: Exception) -> None:
         """Enter the paused state on a challenge/checkpoint: alert + back off.

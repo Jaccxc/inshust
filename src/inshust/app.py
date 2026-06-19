@@ -34,6 +34,7 @@ from inshust.adapter import InstagramAdapter, OperatorPausedError, is_transient_
 from inshust.client import ClientPort
 from inshust.config import Config, load_config
 from inshust.listener import Listener
+from inshust.logging_setup import setup_logging
 from inshust.store import Store
 
 logger = logging.getLogger(__name__)
@@ -135,8 +136,8 @@ def run(
     delivers. ``sleeper``/``should_continue`` are injected so tests drive finite
     cycles with no real network or sleeping.
     """
-    logging.basicConfig(level=logging.INFO)
     config = load_config()
+    setup_logging(config.log_level)
     adapter = InstagramAdapter(config)
     listener = build_listener(config, adapter)
     logger.info(

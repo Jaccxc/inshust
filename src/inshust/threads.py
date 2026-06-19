@@ -18,6 +18,11 @@ import logging
 
 from inshust.adapter import InstagramAdapter
 from inshust.config import Config, load_config
+from inshust.logging_setup import (
+    console_challenge_code_handler,
+    console_two_factor_code_provider,
+    setup_logging,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +63,11 @@ def main() -> None:  # pragma: no cover - thin console wiring, exercised via run
     discovery print. Run this by hand to find the group's thread id, then set
     ``IG_THREAD_ID`` in your ``.env`` before starting the bot.
     """
-    logging.basicConfig(level=logging.INFO)
     config = load_config()
-    adapter = InstagramAdapter(config)
+    setup_logging(config.log_level)
+    adapter = InstagramAdapter(
+        config,
+        challenge_code_handler=console_challenge_code_handler,
+        two_factor_code_provider=console_two_factor_code_provider,
+    )
     run(config=config, adapter=adapter)
