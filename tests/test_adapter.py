@@ -96,3 +96,46 @@ def test_totp_code_supplied_when_2fa_required(tmp_path):
     assert retry.kwargs.get("verification_code") == "654321"
     # Successful 2FA login still persists the session.
     client.dump_settings.assert_called_once_with(cfg.session_path)
+
+
+# --- challenge / checkpoint: pause + alert + back off, do NOT loop ---------
+
+
+def test_challenge_pauses_alerts_and_backs_off_without_looping(tmp_path, caplog):
+    cfg = _config(tmp_path)
+    client = MagicMock()
+    client.login.side_effect = ChallengeRequired("checkpoint")
+
+    adapter = _adapter(cfg, client)
+    with pytest.raises(OperatorPausedError):
+        with caplog.at_level("CRITICAL"):
+            adapter.login()
+
+    # Paused state surfaced for the operator.
+    assert adapter.paused is True
+    # A prominent alert was logged.
+    assert any(r.levelname == "CRITICAL" for r in caplog.records)
+    # It backed off once (slept) and did NOT loop the login.
+    assert client.login.call_count == 1
+    assert adapter.recorded_sleeps  # a backoff delay was requested
+    # No session is persisted from a failed challenge login.
+    client.dump_settings.assert_not_called()
+
+
+def test_paused_adapter_refuses_to_act_further(tmp_path):
+    cfg = _config(tmp_path)
+    client = MagicMock()
+    client.login.side_effect = ChallengeRequired("checkpoint")
+    adapter = _adapter(cfg, client)
+    with pytest.raises(OperatorPausedError):
+        adapter.login()
+
+    # Once paused, the bot must not keep sending into the thread.
+    with pytest.raises(OperatorPausedError):
+        adapter.send_reply(
+            thread_id="42",
+            text="x",
+            original_message_id="m1",
+            original_client_context=None,
+        )
+    client.direct_send.assert_not_called()
