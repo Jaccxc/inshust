@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# uv / virtualenv (uv.lock IS committed)
+.venv/
+
+# Secrets & runtime state — NEVER commit these
+.env
+session.json
+*.session.json
+data/
+*.db
+*.sqlite3
+
+# OS / editor
+.DS_Store
+*.swp

@@ -1,0 +1,28 @@
+# Fly.io config for inshust — a long-running background worker (no public HTTP).
+# Set a globally-unique app name with `fly apps create`, then `fly deploy`.
+# Provide secrets with: fly secrets set IG_USERNAME=... IG_PASSWORD=... IG_TOTP_SEED=... IG_PROXY=...
+# Create the volume once: fly volumes create inshust_data --size 1 --region nrt
+
+app = "inshust"
+primary_region = "nrt"  # Tokyo — closest Fly region to Taiwan
+
+[build]
+
+# Non-secret config (secrets go via `fly secrets set`, not here).
+[env]
+  IG_SESSION_PATH = "/data/session.json"
+  DB_PATH = "/data/inshust.db"
+  TZ = "Asia/Taipei"
+  POLL_INTERVAL_SECONDS = "45"
+  LOG_LEVEL = "INFO"
+
+# Durable volume for the instagrapi session blob + SQLite db.
+[mounts]
+  source = "inshust_data"
+  destination = "/data"
+
+# Single always-on worker machine. No [http_service] — nothing inbound to serve,
+# and we must NOT let it auto-stop (it holds the realtime connection).
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
