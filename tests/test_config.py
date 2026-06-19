@@ -67,3 +67,34 @@ def test_adapter_pacing_defaults():
     assert cfg.action_delay_min_seconds == 2.0
     assert cfg.action_delay_max_seconds == 6.0
     assert cfg.poll_amount == 20
+
+
+def test_backfill_pacing_and_cap_load_from_env():
+    # The one-shot backfill (card #7) has its OWN human-like delay range and an
+    # OPTIONAL message cap, loaded from the documented env names.
+    cfg = load_config(
+        env={
+            "IG_THREAD_ID": "t-1",
+            "BACKFILL_DELAY_MIN": "3.5",
+            "BACKFILL_DELAY_MAX": "9.5",
+            "BACKFILL_MAX_MESSAGES": "500",
+        }
+    )
+    assert cfg.backfill_delay_min_seconds == 3.5
+    assert cfg.backfill_delay_max_seconds == 9.5
+    assert cfg.backfill_max_messages == 500
+
+
+def test_backfill_defaults_blank_cap_means_full_history():
+    cfg = load_config(env={"IG_THREAD_ID": "t-1"})
+    # No backfill range given -> sensible human-like defaults.
+    assert cfg.backfill_delay_min_seconds == 2.0
+    assert cfg.backfill_delay_max_seconds == 6.0
+    # Blank cap -> None -> walk the FULL history.
+    assert cfg.backfill_max_messages is None
+
+
+def test_backfill_blank_cap_string_is_none():
+    # An explicit-but-empty BACKFILL_MAX_MESSAGES (as a .env line `=`) is full.
+    cfg = load_config(env={"IG_THREAD_ID": "t-1", "BACKFILL_MAX_MESSAGES": ""})
+    assert cfg.backfill_max_messages is None
