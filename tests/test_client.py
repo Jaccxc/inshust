@@ -26,3 +26,27 @@ def test_fake_client_records_sent_replies():
 
 def test_fake_client_satisfies_the_port():
     assert isinstance(FakeClient(), ClientPort)
+
+
+def test_fake_client_resolves_url_to_pk_from_its_map():
+    client = FakeClient(url_to_pk={"https://www.instagram.com/reel/CzAbc/": "999"})
+    assert client.resolve_media_pk_from_url("https://www.instagram.com/reel/CzAbc/") == "999"
+
+
+def test_fake_client_counts_resolve_calls():
+    client = FakeClient(url_to_pk={"u1": "1", "u2": "2"})
+    assert client.resolve_calls == 0
+    client.resolve_media_pk_from_url("u1")
+    client.resolve_media_pk_from_url("u2")
+    client.resolve_media_pk_from_url("u1")
+    assert client.resolve_calls == 3
+
+
+def test_fake_client_unknown_url_raises():
+    client = FakeClient(url_to_pk={"u1": "1"})
+    try:
+        client.resolve_media_pk_from_url("unknown")
+    except Exception:
+        pass
+    else:
+        raise AssertionError("expected an unresolvable URL to raise")

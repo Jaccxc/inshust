@@ -11,10 +11,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 # --- media_type constants (TEXT) -------------------------------------------
-# The simplest two share forms this slice handles. Both carry a full Media
-# object with a stable ``pk``/``code``. xma forms (card #3) will add more.
+# ``clip`` and ``feed`` carry a full Media object with a stable ``pk``/``code``.
+# ``xma`` is the rich URL-only share card (xma_share/generic_xma): its ShareRef
+# carries a ``url`` with ``pk``/``shortcode`` left ``None`` until the resolver
+# turns the url into a pk (card #4).
 MEDIA_TYPE_CLIP = "clip"
 MEDIA_TYPE_FEED = "feed"
+MEDIA_TYPE_XMA = "xma"
 
 # --- DedupeDecision.kind constants (TEXT) ----------------------------------
 FIRST_SEEN = "FIRST_SEEN"

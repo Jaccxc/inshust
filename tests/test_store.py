@@ -63,6 +63,34 @@ def test_state_persists_across_reopen(tmp_path):
     assert reopened.is_processed("m1") is True
 
 
+def test_url_cache_miss_returns_none(tmp_path):
+    store = Store(str(tmp_path / "db.sqlite"))
+    assert store.get_cached_pk("https://www.instagram.com/reel/CzAbc/") is None
+
+
+def test_url_cache_round_trips(tmp_path):
+    store = Store(str(tmp_path / "db.sqlite"))
+    store.cache_url_pk("https://www.instagram.com/reel/CzAbc/", "999", resolved_at=1_700_000_000)
+    assert store.get_cached_pk("https://www.instagram.com/reel/CzAbc/") == "999"
+
+
+def test_url_cache_keeps_first_resolution(tmp_path):
+    # A url maps to one media; re-caching must not clobber the original pk.
+    store = Store(str(tmp_path / "db.sqlite"))
+    store.cache_url_pk("u1", "111", resolved_at=1000)
+    store.cache_url_pk("u1", "222", resolved_at=2000)
+    assert store.get_cached_pk("u1") == "111"
+
+
+def test_url_cache_persists_across_reopen(tmp_path):
+    path = str(tmp_path / "db.sqlite")
+    store = Store(path)
+    store.cache_url_pk("u1", "111", resolved_at=1000)
+    store.close()
+    reopened = Store(path)
+    assert reopened.get_cached_pk("u1") == "111"
+
+
 def test_record_share_is_idempotent_keeps_first(tmp_path):
     # If the same media pk is recorded twice, the first-seen record stands.
     store = Store(str(tmp_path / "db.sqlite"))
