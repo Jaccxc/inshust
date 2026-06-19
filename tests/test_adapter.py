@@ -15,6 +15,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from instagrapi.exceptions import ChallengeRequired, TwoFactorRequired
+
 from inshust.adapter import InstagramAdapter, OperatorPausedError
 from inshust.config import Config
 
@@ -72,3 +74,25 @@ def test_fresh_login_when_no_session_then_persists(tmp_path):
     # Session is persisted so the next start reuses it.
     client.dump_settings.assert_called_once_with(cfg.session_path)
     client.load_settings.assert_not_called()
+
+
+# --- 2FA (TOTP) ------------------------------------------------------------
+
+
+def test_totp_code_supplied_when_2fa_required(tmp_path):
+    cfg = _config(tmp_path)
+    client = MagicMock()
+    # First login attempt demands 2FA; the retry with a code succeeds.
+    client.login.side_effect = [TwoFactorRequired("2fa needed"), True]
+    client.totp_generate_code.return_value = "654321"
+
+    _adapter(cfg, client).login()
+
+    # TOTP generated from the configured seed...
+    client.totp_generate_code.assert_called_once_with("SEED123")
+    # ...and the retry supplies that exact code.
+    assert client.login.call_count == 2
+    retry = client.login.call_args_list[1]
+    assert retry.kwargs.get("verification_code") == "654321"
+    # Successful 2FA login still persists the session.
+    client.dump_settings.assert_called_once_with(cfg.session_path)
