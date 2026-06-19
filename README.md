@@ -60,6 +60,7 @@ backfills on start.
 uv sync                  # create .venv and install deps (incl. dev group)
 cp .env.example .env     # then fill in a DEDICATED burner account + thread id
 uv run inshust           # run the bot (placeholder until features land)
+uv run inshust-threads   # list your Direct group threads to find IG_THREAD_ID (run by hand)
 uv run inshust-backfill  # one-shot history backfill into ./data/inshust.db (run by hand once)
 uv run pytest            # run tests
 uv run ruff check .      # lint
