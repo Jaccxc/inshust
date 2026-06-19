@@ -23,7 +23,7 @@ The walk:
 
 It sends NO replies — it deliberately does NOT go through
 ``Listener.handle_message`` (which would reply on duplicates). Non-media and
-unresolvable messages are skipped silently.
+unresolvable messages are skipped with an INFO log explaining why.
 
 Every test drives this with a mock client (scripted history pages) and a fake
 clock; no network, no real login.
@@ -40,7 +40,7 @@ from inshust.logging_setup import (
     console_two_factor_code_provider,
     setup_logging,
 )
-from inshust.media_identity import extract_share
+from inshust.media_identity import explain_non_share, extract_share
 from inshust.models import ShareEvent
 from inshust.resolver import MediaResolver
 from inshust.store import Store
@@ -105,12 +105,22 @@ class Backfill:
         """
         ref = extract_share(message)
         if ref is None:
-            return False  # non-media: nothing to record
+            logger.info(
+                "backfill skip: %s — id=%s from=@%s",
+                explain_non_share(message),
+                getattr(message, "id", "?"),
+                getattr(message, "username", "") or "?",
+            )
+            return False
         media_key = self._resolver.resolve(ref)
         if media_key is None:
-            logger.warning(
-                "could not resolve historical share for message %s; skipping",
+            logger.info(
+                "backfill skip: could not resolve to media pk — id=%s from=@%s "
+                "item_type=%s url=%s",
                 getattr(message, "id", "?"),
+                getattr(message, "username", "") or "?",
+                getattr(message, "item_type", None) or "?",
+                ref.url or "?",
             )
             return False
         event = ShareEvent(
@@ -123,6 +133,12 @@ class Backfill:
             client_context=getattr(message, "client_context", None),
         )
         self._store.record_share(event)
+        logger.info(
+            "backfill record: media_pk=%s from=@%s id=%s",
+            media_key.pk,
+            event.sender_username,
+            event.message_id,
+        )
         return True
 
 

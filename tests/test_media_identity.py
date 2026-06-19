@@ -82,6 +82,22 @@ def test_xma_media_share_item_type_is_detected():
     assert ref.media_type == MEDIA_TYPE_XMA
 
 
+def test_xma_clip_item_type_is_detected():
+    msg = _msg(item_type="xma_clip", xma_share=_xma("https://www.instagram.com/reel/CzClip/"))
+    ref = extract_share(msg)
+    assert ref is not None
+    assert ref.url == "https://www.instagram.com/reel/CzClip/"
+    assert ref.media_type == MEDIA_TYPE_XMA
+
+
+def test_xma_clip_with_embedded_clip_uses_pk():
+    msg = _msg(item_type="xma_clip", clip=_media(pk=777, code="CzClip"), xma_share=None)
+    ref = extract_share(msg)
+    assert ref is not None
+    assert ref.pk == "777"
+    assert ref.media_type == MEDIA_TYPE_CLIP
+
+
 def test_xma_item_type_but_no_url_is_not_a_share():
     # An xma item without any extractable URL is treated as non-media.
     msg = _msg(item_type="xma_share", xma_share=None, generic_xma=None)

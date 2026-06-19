@@ -117,6 +117,33 @@ def test_backfill_records_clip_media_share_and_xma_shares(tmp_path):
     # (only the three pks above exist; nothing else to assert directly)
 
 
+def test_backfill_logs_skip_reasons_for_non_media(tmp_path, caplog):
+    cfg = _config(tmp_path)
+    client = MagicMock()
+    page = _page(
+        [
+            _dm("m2", user_id="uid-bob", item_type="text", ts=1_700_200_000),
+            _dm("m1", user_id="uid-alice", item_type="clip", ts=1_700_100_000, clip_pk="100"),
+        ],
+        users={"uid-alice": "alice", "uid-bob": "bob"},
+        oldest_cursor=None,
+    )
+    client.direct_thread.return_value = page
+
+    store = Store(cfg.db_path)
+    adapter = _adapter(cfg, client)
+    with caplog.at_level("INFO", logger="inshust.backfill"):
+        Backfill(cfg, store, adapter).run()
+
+    skip_logs = [r for r in caplog.records if "backfill skip:" in r.message]
+    record_logs = [r for r in caplog.records if "backfill record:" in r.message]
+    assert len(skip_logs) == 1
+    assert "not a reel/post share (item_type=text)" in skip_logs[0].message
+    assert "m2" in skip_logs[0].message
+    assert len(record_logs) == 1
+    assert "media_pk=100" in record_logs[0].message
+
+
 def test_backfill_sends_no_replies(tmp_path):
     cfg = _config(tmp_path)
     client = MagicMock()

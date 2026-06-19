@@ -19,7 +19,9 @@ from dataclasses import dataclass
 from inshust.models import MEDIA_TYPE_CLIP, MEDIA_TYPE_FEED, MEDIA_TYPE_XMA
 
 # instagrapi item_type values for rich URL-only share cards.
-_XMA_ITEM_TYPES = frozenset({"xma_share", "generic_xma", "xma_media_share"})
+# ``xma_clip`` is the newer reel-share card; instagrapi maps its payload onto
+# ``xma_share`` (see extract_direct_message) but leaves item_type as xma_clip.
+_XMA_ITEM_TYPES = frozenset({"xma_share", "generic_xma", "xma_media_share", "xma_clip"})
 
 
 @dataclass(frozen=True)
@@ -67,9 +69,28 @@ def _xma_url(message: object) -> str | None:
         candidates.extend(generic)
 
     for xma in candidates:
-        url = getattr(xma, "url", None) or getattr(xma, "video_url", None)
+        url = (
+            getattr(xma, "url", None)
+            or getattr(xma, "video_url", None)
+            or getattr(xma, "target_url", None)
+        )
         if url:
             return str(url)
+
+    raw_xma = getattr(message, "raw_xma", None)
+    if raw_xma is not None:
+        for key in ("xma_clip", "xma_media_share"):
+            items = getattr(raw_xma, key, None) if not isinstance(raw_xma, dict) else raw_xma.get(key)
+            if not items:
+                continue
+            for item in items:
+                url = (
+                    getattr(item, "target_url", None)
+                    or getattr(item, "video_url", None)
+                    or getattr(item, "url", None)
+                )
+                if url:
+                    return str(url)
     return None
 
 
@@ -92,9 +113,44 @@ def extract_share(message: object) -> ShareRef | None:
             return _from_media(media_share, MEDIA_TYPE_FEED)
 
     if item_type in _XMA_ITEM_TYPES:
+        clip = getattr(message, "clip", None)
+        if clip is not None:
+            ref = _from_media(clip, MEDIA_TYPE_CLIP)
+            if ref is not None:
+                return ref
         url = _xma_url(message)
         if url is not None:
             # URL-only: pk/shortcode stay None until the resolver fills them.
             return ShareRef(pk=None, shortcode=None, media_type=MEDIA_TYPE_XMA, url=url)
 
     return None
+
+
+def explain_non_share(message: object) -> str:
+    """Return a short reason ``extract_share`` would not treat ``message`` as a share."""
+    item_type = getattr(message, "item_type", None)
+
+    if item_type == "clip":
+        clip = getattr(message, "clip", None)
+        if clip is None:
+            return "clip message missing clip payload"
+        if getattr(clip, "pk", None) is None:
+            return "clip missing media pk"
+
+    if item_type == "media_share":
+        media_share = getattr(message, "media_share", None)
+        if media_share is None:
+            return "media_share missing payload"
+        if getattr(media_share, "pk", None) is None:
+            return "media_share missing media pk"
+
+    if item_type in _XMA_ITEM_TYPES:
+        clip = getattr(message, "clip", None)
+        if clip is not None and getattr(clip, "pk", None) is None:
+            return "xma clip missing media pk"
+        if _xma_url(message) is None:
+            return "xma share missing url"
+
+    if item_type is None:
+        return "no item_type"
+    return f"not a reel/post share (item_type={item_type})"
