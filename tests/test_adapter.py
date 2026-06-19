@@ -251,3 +251,62 @@ def test_resolve_media_pk_delegates_to_client(tmp_path):
     client.media_pk_from_url.assert_called_once_with("https://www.instagram.com/reel/CzAbc/")
     assert pk == "123456789"  # normalized to str for the canonical MediaKey
     assert adapter.recorded_sleeps  # spaced by a human-like delay too
+
+
+# --- normalization: instagrapi DirectMessage -> what extract_share wants ---
+
+
+def test_normalize_converts_timestamp_to_epoch_and_resolves_username():
+    from datetime import datetime, timezone
+
+    from inshust.adapter import normalize_direct_message
+
+    media = SimpleNamespace(pk=100, code="CzAbc")
+    dm = SimpleNamespace(
+        id="m1",
+        user_id="uid-alice",
+        item_type="clip",
+        timestamp=datetime(2026, 6, 10, 14, 32, tzinfo=timezone.utc),
+        client_context="ctx",
+        clip=media,
+        media_share=None,
+        xma_share=None,
+        generic_xma=None,
+    )
+
+    norm = normalize_direct_message(dm, users_by_id={"uid-alice": "alice"})
+
+    assert norm.id == "m1"
+    assert norm.user_id == "uid-alice"
+    assert norm.username == "alice"  # resolved from the thread's user map
+    assert norm.item_type == "clip"
+    # datetime -> epoch seconds (int) as the pipeline expects.
+    assert norm.timestamp == int(
+        datetime(2026, 6, 10, 14, 32, tzinfo=timezone.utc).timestamp()
+    )
+    assert norm.client_context == "ctx"
+    # share fields pass through so extract_share sees the real media object.
+    assert norm.clip is media
+
+
+def test_normalize_unknown_user_falls_back_to_user_id():
+    from datetime import datetime, timezone
+
+    from inshust.adapter import normalize_direct_message
+
+    dm = SimpleNamespace(
+        id="m2",
+        user_id="uid-x",
+        item_type="text",
+        timestamp=datetime(2026, 6, 10, tzinfo=timezone.utc),
+        client_context=None,
+        clip=None,
+        media_share=None,
+        xma_share=None,
+        generic_xma=None,
+    )
+
+    norm = normalize_direct_message(dm, users_by_id={})
+
+    # Unknown sender -> username falls back to the user id (never crashes).
+    assert norm.username == "uid-x"
